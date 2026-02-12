@@ -5,8 +5,9 @@ import type {
   GroupingReview,
 } from '../types';
 
-const AUTO_APPLY_MIN_CONFIDENCE = 0.72;
+const AUTO_APPLY_MIN_CONFIDENCE = 0.8;
 const CLAUSE_START_REGEX = /^\s*\d+(?:\.\d+)*\.?(?:\s|$)/;
+const CLAUSE_ID_REGEX = /(?:^|\n)\s*(\d+(?:\.\d+)*\.?)(?=\s|$)/g;
 
 interface ApplyGroupingSuggestionsResult {
   differences: Difference[];
@@ -136,14 +137,57 @@ export function applyGroupingSuggestions(
 }
 
 function canMerge(left: Difference, right: Difference): boolean {
-  const leftClause = detectClauseId(left.originalText || left.proposedText || '');
-  const rightClause = detectClauseId(right.originalText || right.proposedText || '');
-
-  if (leftClause && rightClause && leftClause !== rightClause) {
+  if (!isSafeTypeMerge(left, right)) {
     return false;
   }
 
+  const leftClauses = extractClauseIds(left);
+  const rightClauses = extractClauseIds(right);
+  const hasClauseOverlap = setsIntersect(leftClauses, rightClauses);
+
+  // Never merge if both sides clearly reference different clause markers.
+  if (leftClauses.size > 0 && rightClauses.size > 0 && !hasClauseOverlap) {
+    return false;
+  }
+
+  // Require positional adjacency if we have positional information.
+  if (!isPositionAdjacent(left, right)) {
+    return false;
+  }
+
+  // If only one side has a clause marker, only allow merge when the other side is
+  // a small fragment likely split from the same sentence.
+  if (leftClauses.size > 0 && rightClauses.size === 0) {
+    return isLikelyFragment(right);
+  }
+  if (rightClauses.size > 0 && leftClauses.size === 0) {
+    return isLikelyFragment(left);
+  }
+
+  // If neither side has a clause marker, be conservative and only merge fragments.
+  if (leftClauses.size === 0 && rightClauses.size === 0) {
+    return isLikelyFragment(left) || isLikelyFragment(right);
+  }
+
   return true;
+}
+
+function isSafeTypeMerge(left: Difference, right: Difference): boolean {
+  if (left.type === right.type) {
+    // For same-type merges, require at least one side to look like a fragment.
+    // This prevents collapsing two substantive standalone edits into one.
+    return isLikelyFragment(left) || isLikelyFragment(right);
+  }
+
+  // For cross-type merges (e.g. deletion + modification), be extremely strict:
+  // only allow when both sides are tiny fragments.
+  if (!isLikelyFragment(left) || !isLikelyFragment(right)) {
+    return false;
+  }
+
+  const leftLength = getChangeTextLength(left);
+  const rightLength = getChangeTextLength(right);
+  return leftLength <= 32 && rightLength <= 32;
 }
 
 function mergeDifferences(left: Difference, right: Difference, mergedId: string): Difference {
@@ -383,12 +427,77 @@ function splitStructuredText(text: string): string[] {
   return segments.filter((segment) => segment.length > 0);
 }
 
-function detectClauseId(text: string): string {
-  const match = text.match(/^\s*(\d+(?:\.\d+)*\.?)(?:\s|$)/);
-  if (!match) {
-    return '';
+function extractClauseIds(difference: Difference): Set<string> {
+  const result = new Set<string>();
+  const source = `${difference.originalText || ''}\n${difference.proposedText || ''}`;
+  let match = CLAUSE_ID_REGEX.exec(source);
+  while (match) {
+    result.add(match[1].replace(/\.$/, ''));
+    match = CLAUSE_ID_REGEX.exec(source);
   }
-  return match[1].replace(/\.$/, '');
+  CLAUSE_ID_REGEX.lastIndex = 0;
+  return result;
+}
+
+function setsIntersect(left: Set<string>, right: Set<string>): boolean {
+  for (const value of left) {
+    if (right.has(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPositionAdjacent(left: Difference, right: Difference): boolean {
+  const originalAdjacent = areRangesAdjacent(left.originalPosition, right.originalPosition);
+  const proposedAdjacent = areRangesAdjacent(left.proposedPosition, right.proposedPosition);
+
+  // If both unavailable, allow fallback path.
+  if (originalAdjacent === null && proposedAdjacent === null) {
+    return true;
+  }
+
+  return originalAdjacent === true || proposedAdjacent === true;
+}
+
+function areRangesAdjacent(
+  left?: { start: number; end: number },
+  right?: { start: number; end: number }
+): boolean | null {
+  if (!left || !right) {
+    return null;
+  }
+
+  const gap = right.start - left.end;
+  // Allow tiny overlap and short separator only.
+  return gap >= -4 && gap <= 40;
+}
+
+function isLikelyFragment(difference: Difference): boolean {
+  const text = `${difference.originalText || ''} ${difference.proposedText || ''}`.trim();
+  if (!text) {
+    return false;
+  }
+
+  const tokenCount = (text.match(/\S+/g) || []).length;
+  const hasLineBreak = text.includes('\n');
+  const startsWithConnector = /^[,;:\])}\s]/.test(text);
+  const endsWithConnector = /[,;:([{]\s*$/.test(text);
+
+  if (tokenCount <= 6 && text.length <= 50) {
+    return true;
+  }
+
+  if ((startsWithConnector || endsWithConnector) && text.length <= 80) {
+    return true;
+  }
+
+  return !hasLineBreak && tokenCount <= 10 && text.length <= 70;
+}
+
+function getChangeTextLength(difference: Difference): number {
+  const text = `${difference.originalText || ''}${difference.proposedText || ''}`;
+  return text.trim().length;
 }
 
 function generateLogId(): string {

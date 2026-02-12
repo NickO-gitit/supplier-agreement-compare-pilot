@@ -140,6 +140,10 @@ function convertUnitsToDifferences(units: DiffUnit[]): Difference[] {
       continue;
     }
 
+    if (isSuppressedNonMeaningfulModification(unit)) {
+      continue;
+    }
+
     const difference: Difference = {
       id: unit.id,
       type: unit.type,
@@ -186,6 +190,12 @@ export function generateDiffHTML(
       const escaped = escapeHTML(unit.text);
       originalHTML += escaped;
       proposedHTML += escaped;
+      continue;
+    }
+
+    if (isSuppressedNonMeaningfulModification(unit)) {
+      originalHTML += escapeHTML(unit.originalText || '');
+      proposedHTML += escapeHTML(unit.proposedText || '');
       continue;
     }
 
@@ -253,6 +263,11 @@ export function generateInlineDiffHTML(
       continue;
     }
 
+    if (isSuppressedNonMeaningfulModification(unit)) {
+      html += escapeHTML(unit.proposedText || unit.originalText || '');
+      continue;
+    }
+
     if (unit.type === 'modification') {
       html += wrapDiffSpan(
         escapeHTML(unit.originalText || ''),
@@ -296,6 +311,10 @@ function getDiffs(
   const original = normalizeText(originalText);
   const proposed = normalizeText(proposedText);
 
+  if (mode === 'word') {
+    return getWordLevelDiffs(original, proposed);
+  }
+
   let diffs = dmp.diff_main(original, proposed);
   dmp.diff_cleanupSemantic(diffs);
 
@@ -304,6 +323,291 @@ function getDiffs(
   }
 
   return diffs;
+}
+
+function getWordLevelDiffs(original: string, proposed: string): [number, string][] {
+  const lineAnchoredDiffs = getLineAnchoredDiffs(original, proposed);
+  const refined: [number, string][] = [];
+
+  for (let index = 0; index < lineAnchoredDiffs.length; index++) {
+    const [op, text] = lineAnchoredDiffs[index];
+    if (op === 0) {
+      refined.push([0, text]);
+      continue;
+    }
+
+    let deletedText = '';
+    let addedText = '';
+    let cursor = index;
+
+    while (cursor < lineAnchoredDiffs.length && lineAnchoredDiffs[cursor][0] !== 0) {
+      const [chunkOp, chunkText] = lineAnchoredDiffs[cursor];
+      if (chunkOp === -1) {
+        deletedText += chunkText;
+      } else if (chunkOp === 1) {
+        addedText += chunkText;
+      }
+      cursor++;
+    }
+
+    if (deletedText && addedText) {
+      const deletedLines = splitLines(deletedText);
+      const addedLines = splitLines(addedText);
+
+      // For larger multi-line change blocks, keep line anchoring intact to avoid
+      // long-distance token matches across sections/clauses.
+      if (deletedLines.length === 1 && addedLines.length === 1) {
+        refined.push(...getTokenWordDiffs(deletedText, addedText));
+      } else {
+        refined.push(...reanchorEquivalentLinesInBlock(deletedText, addedText));
+      }
+    } else if (deletedText) {
+      refined.push([-1, deletedText]);
+    } else if (addedText) {
+      refined.push([1, addedText]);
+    }
+
+    index = cursor - 1;
+  }
+
+  return coalesceDiffs(refined);
+}
+
+function getLineAnchoredDiffs(original: string, proposed: string): [number, string][] {
+  const internals = dmp as unknown as {
+    diff_linesToChars_: (text1: string, text2: string) => {
+      chars1: string;
+      chars2: string;
+      lineArray: string[];
+    };
+    diff_charsToLines_: (value: [number, string][], lines: string[]) => void;
+  };
+
+  const encoded = internals.diff_linesToChars_(original, proposed);
+  let diffs = dmp.diff_main(encoded.chars1, encoded.chars2, false);
+  dmp.diff_cleanupSemantic(diffs);
+  internals.diff_charsToLines_(diffs, encoded.lineArray);
+  return diffs;
+}
+
+function getTokenWordDiffs(original: string, proposed: string): [number, string][] {
+  const tokenized = wordsToChars(original, proposed);
+  if (!tokenized) {
+    // Fallback for unusually large token maps.
+    let fallback = dmp.diff_main(original, proposed);
+    dmp.diff_cleanupSemantic(fallback);
+    return fallback;
+  }
+
+  let diffs = dmp.diff_main(tokenized.chars1, tokenized.chars2, false);
+  dmp.diff_cleanupSemantic(diffs);
+
+  // diff-match-patch exposes this helper for line-mode internals.
+  const internals = dmp as unknown as {
+    diff_charsToLines_: (value: [number, string][], lines: string[]) => void;
+  };
+  internals.diff_charsToLines_(diffs, tokenized.tokenArray);
+  return coalesceDiffs(diffs);
+}
+
+function wordsToChars(
+  original: string,
+  proposed: string
+): { chars1: string; chars2: string; tokenArray: string[] } | null {
+  const tokenArray: string[] = [''];
+  const tokenLookup = new Map<string, number>();
+  const MAX_TOKEN_CODEPOINT = 65535;
+
+  const encode = (input: string): string | null => {
+    const tokens = input.match(/\S+|\s+/g) || [];
+    let encoded = '';
+
+    for (const token of tokens) {
+      const existing = tokenLookup.get(token);
+      if (existing !== undefined) {
+        encoded += String.fromCharCode(existing);
+        continue;
+      }
+
+      if (tokenArray.length > MAX_TOKEN_CODEPOINT) {
+        return null;
+      }
+
+      tokenArray.push(token);
+      const tokenId = tokenArray.length - 1;
+      tokenLookup.set(token, tokenId);
+      encoded += String.fromCharCode(tokenId);
+    }
+
+    return encoded;
+  };
+
+  const chars1 = encode(original);
+  if (chars1 === null) {
+    return null;
+  }
+
+  const chars2 = encode(proposed);
+  if (chars2 === null) {
+    return null;
+  }
+
+  return { chars1, chars2, tokenArray };
+}
+
+function splitLines(text: string): string[] {
+  if (!text) {
+    return [];
+  }
+  return text.match(/[^\n]*\n|[^\n]+$/g) || [text];
+}
+
+function reanchorEquivalentLinesInBlock(
+  deletedText: string,
+  addedText: string
+): [number, string][] {
+  const deletedLines = splitLines(deletedText);
+  const addedLines = splitLines(addedText);
+  const matches = buildNormalizedLineMatches(deletedLines, addedLines);
+
+  if (matches.length === 0) {
+    return coalesceDiffs([
+      [-1, deletedText],
+      [1, addedText],
+    ]);
+  }
+
+  const output: [number, string][] = [];
+  let deletedIndex = 0;
+  let addedIndex = 0;
+
+  for (const [matchedDeletedIndex, matchedAddedIndex] of matches) {
+    if (deletedIndex < matchedDeletedIndex) {
+      output.push([-1, deletedLines.slice(deletedIndex, matchedDeletedIndex).join('')]);
+    }
+    if (addedIndex < matchedAddedIndex) {
+      output.push([1, addedLines.slice(addedIndex, matchedAddedIndex).join('')]);
+    }
+
+    const deletedLine = deletedLines[matchedDeletedIndex];
+    const addedLine = addedLines[matchedAddedIndex];
+
+    if (deletedLine === addedLine) {
+      output.push([0, deletedLine]);
+    } else {
+      // Keep as change pair so position accounting stays accurate, then suppression
+      // can remove non-meaningful variants.
+      output.push([-1, deletedLine], [1, addedLine]);
+    }
+
+    deletedIndex = matchedDeletedIndex + 1;
+    addedIndex = matchedAddedIndex + 1;
+  }
+
+  if (deletedIndex < deletedLines.length) {
+    output.push([-1, deletedLines.slice(deletedIndex).join('')]);
+  }
+  if (addedIndex < addedLines.length) {
+    output.push([1, addedLines.slice(addedIndex).join('')]);
+  }
+
+  return coalesceDiffs(output);
+}
+
+function buildNormalizedLineMatches(
+  deletedLines: string[],
+  addedLines: string[]
+): Array<[number, number]> {
+  const deletedNormalized = deletedLines.map((line) => normalizeForMeaningfulComparison(line));
+  const addedNormalized = addedLines.map((line) => normalizeForMeaningfulComparison(line));
+  const rows = deletedLines.length;
+  const cols = addedLines.length;
+  const dp: number[][] = Array.from({ length: rows + 1 }, () =>
+    Array.from({ length: cols + 1 }, () => 0)
+  );
+
+  for (let i = rows - 1; i >= 0; i--) {
+    for (let j = cols - 1; j >= 0; j--) {
+      if (
+        areEquivalentLinesForAnchoring(
+          deletedLines[i],
+          addedLines[j],
+          deletedNormalized[i],
+          addedNormalized[j]
+        )
+      ) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  const matches: Array<[number, number]> = [];
+  let i = 0;
+  let j = 0;
+  while (i < rows && j < cols) {
+    if (
+      areEquivalentLinesForAnchoring(
+        deletedLines[i],
+        addedLines[j],
+        deletedNormalized[i],
+        addedNormalized[j]
+      )
+    ) {
+      matches.push([i, j]);
+      i++;
+      j++;
+      continue;
+    }
+
+    if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+
+  return matches;
+}
+
+function areEquivalentLinesForAnchoring(
+  deletedLine: string,
+  addedLine: string,
+  deletedNormalized: string,
+  addedNormalized: string
+): boolean {
+  if (deletedLine === addedLine) {
+    return true;
+  }
+
+  if (deletedNormalized !== addedNormalized) {
+    return false;
+  }
+
+  // Avoid anchoring on very short normalized tokens, which can cause accidental
+  // long-distance matches on punctuation-only lines.
+  if (deletedNormalized.length < 6) {
+    return false;
+  }
+
+  return true;
+}
+
+function coalesceDiffs(diffs: [number, string][]): [number, string][] {
+  const result: [number, string][] = [];
+  for (const [op, text] of diffs) {
+    if (!text) {
+      continue;
+    }
+    const previous = result[result.length - 1];
+    if (previous && previous[0] === op) {
+      previous[1] += text;
+      continue;
+    }
+    result.push([op, text]);
+  }
+  return result;
 }
 
 function buildDiffUnits(diffs: [number, string][]): DiffUnit[] {
@@ -463,6 +767,21 @@ function splitModificationRun(deletedText: string, addedText: string): ChangePar
   const addedParts = splitStructuredText(addedText);
 
   if (deletedParts.length === 1 && addedParts.length === 1) {
+    if (!shouldPairAsModification(deletedText, addedText)) {
+      return [
+        {
+          type: 'deletion',
+          originalText: deletedText,
+          proposedText: null,
+        },
+        {
+          type: 'addition',
+          originalText: null,
+          proposedText: addedText,
+        },
+      ];
+    }
+
     return [
       {
         type: 'modification',
@@ -602,11 +921,42 @@ function splitStructuredText(text: string): string[] {
     segments.push(current);
   }
 
-  if (!foundBoundary || segments.length <= 1) {
+  const normalizedSegments = mergeWhitespaceOnlySegments(segments);
+
+  if (!foundBoundary || normalizedSegments.length <= 1) {
     return [text];
   }
 
-  return segments.filter((segment) => segment.length > 0);
+  return normalizedSegments.filter((segment) => segment.length > 0);
+}
+
+function mergeWhitespaceOnlySegments(segments: string[]): string[] {
+  if (segments.length <= 1) {
+    return segments;
+  }
+
+  const merged: string[] = [];
+  let pendingWhitespace = '';
+
+  for (const segment of segments) {
+    if (segment.trim().length === 0) {
+      pendingWhitespace += segment;
+      continue;
+    }
+
+    merged.push(`${pendingWhitespace}${segment}`);
+    pendingWhitespace = '';
+  }
+
+  if (pendingWhitespace.length > 0) {
+    if (merged.length > 0) {
+      merged[merged.length - 1] += pendingWhitespace;
+    } else {
+      merged.push(pendingWhitespace);
+    }
+  }
+
+  return merged;
 }
 
 function getContextFromUnits(units: DiffUnit[], currentIndex: number): string {
@@ -741,4 +1091,23 @@ function toWordSet(value: string): Set<string> {
 
 function wrapDiffSpan(text: string, className: string, diffId: string): string {
   return `<span class="diff-segment ${className}" data-diff-id="${diffId}">${text}</span>`;
+}
+
+function isSuppressedNonMeaningfulModification(unit: DiffUnit): boolean {
+  if (unit.kind !== 'change' || unit.type !== 'modification') {
+    return false;
+  }
+
+  const original = normalizeForMeaningfulComparison(unit.originalText || '');
+  const proposed = normalizeForMeaningfulComparison(unit.proposedText || '');
+  return original.length > 0 && proposed.length > 0 && original === proposed;
+}
+
+function normalizeForMeaningfulComparison(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/\u00A0/g, ' ')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
 }
