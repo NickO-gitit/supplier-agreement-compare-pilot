@@ -22,7 +22,7 @@ module.exports = async function (context, req) {
     const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
     const apiKey = process.env.AZURE_OPENAI_KEY;
     const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
-    const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2024-02-15-preview";
+    const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 
     if (!endpoint || !apiKey || !deployment) {
       context.res = {

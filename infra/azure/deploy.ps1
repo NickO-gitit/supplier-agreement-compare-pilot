@@ -26,7 +26,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$OpenAIModelVersion,
 
-  [string]$OpenAIApiVersion = "2024-02-15-preview",
+  [string]$OpenAIApiVersion = "2024-10-21",
   [int]$OpenAIDeploymentCapacity = 10,
   [string]$GitHubRepo = ""
 )

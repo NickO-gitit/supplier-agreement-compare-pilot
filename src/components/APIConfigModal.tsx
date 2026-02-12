@@ -119,7 +119,7 @@ export function APIConfigModal({ isOpen, onClose, onSave, currentConfig }: APICo
             <>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Endpoint
+                  Endpoint (Resource URL)
                 </label>
                 <input
                   type="text"
@@ -128,6 +128,9 @@ export function APIConfigModal({ isOpen, onClose, onSave, currentConfig }: APICo
                   placeholder="https://your-resource.openai.azure.com"
                   className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Use the resource endpoint only (no <code>/openai/deployments/...</code> path).
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">

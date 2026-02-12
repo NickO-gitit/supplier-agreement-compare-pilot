@@ -23,6 +23,7 @@ interface OpenAIConfig {
   apiKey: string;
   endpoint?: string; // For Azure OpenAI
   deploymentName?: string; // For Azure OpenAI
+  azureApiVersion?: string; // For Azure OpenAI
   isAzure?: boolean;
   model?: string; // For OpenAI
 }
@@ -114,9 +115,11 @@ export async function analyzeAllRisks(
 async function callOpenAI(prompt: string): Promise<string> {
   if (!config) throw new Error('Not configured');
 
-  const url = config.isAzure
-    ? `${config.endpoint}/openai/deployments/${config.deploymentName}/chat/completions?api-version=2024-02-15-preview`
-    : 'https://api.openai.com/v1/chat/completions';
+  let url = 'https://api.openai.com/v1/chat/completions';
+  if (config.isAzure) {
+    const azureInfo = resolveAzureConfig(config);
+    url = `${azureInfo.endpoint}/openai/deployments/${azureInfo.deploymentName}/chat/completions?api-version=${azureInfo.apiVersion}`;
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -153,6 +156,11 @@ async function callOpenAI(prompt: string): Promise<string> {
 
   if (!response.ok) {
     const error = await response.text();
+    if (config.isAzure && response.status === 404) {
+      throw new Error(
+        `OpenAI API error: ${error}. Check Azure endpoint/deployment. Endpoint must be like https://<resource>.openai.azure.com (no /openai/deployments path). Deployment must exactly match your Azure deployment name.`
+      );
+    }
     throw new Error(`OpenAI API error: ${error}`);
   }
 
@@ -232,6 +240,61 @@ function getRiskProxyUrl(): string | null {
 
 function hasRiskProxyConfigured(): boolean {
   return !!getRiskProxyUrl();
+}
+
+function resolveAzureConfig(currentConfig: OpenAIConfig): {
+  endpoint: string;
+  deploymentName: string;
+  apiVersion: string;
+} {
+  const normalizedEndpoint = normalizeAzureEndpoint(currentConfig.endpoint);
+  const deploymentName =
+    stringOrFallback(currentConfig.deploymentName, '') ||
+    extractDeploymentNameFromEndpoint(currentConfig.endpoint);
+
+  if (!normalizedEndpoint) {
+    throw new Error(
+      'Azure endpoint is missing. Use the resource endpoint (for example https://myresource.openai.azure.com).'
+    );
+  }
+
+  if (!deploymentName) {
+    throw new Error(
+      'Azure deployment name is missing. Use the deployment name exactly as shown in Azure OpenAI Deployments.'
+    );
+  }
+
+  return {
+    endpoint: normalizedEndpoint,
+    deploymentName,
+    apiVersion: stringOrFallback(currentConfig.azureApiVersion, '2024-10-21'),
+  };
+}
+
+function normalizeAzureEndpoint(value: string | undefined): string {
+  const input = stringOrFallback(value, '');
+  if (!input) return '';
+
+  // Accept full target URIs and normalize to resource endpoint root.
+  const withoutQuery = input.split('?')[0];
+  const marker = '/openai/deployments/';
+  const markerIndex = withoutQuery.toLowerCase().indexOf(marker);
+  const root = markerIndex >= 0 ? withoutQuery.slice(0, markerIndex) : withoutQuery;
+  return root.replace(/\/+$/, '');
+}
+
+function extractDeploymentNameFromEndpoint(value: string | undefined): string {
+  const input = stringOrFallback(value, '');
+  if (!input) return '';
+
+  const marker = '/openai/deployments/';
+  const lower = input.toLowerCase();
+  const markerIndex = lower.indexOf(marker);
+  if (markerIndex < 0) return '';
+
+  const after = input.slice(markerIndex + marker.length);
+  const firstSegment = after.split('/')[0];
+  return firstSegment.trim();
 }
 
 /**
