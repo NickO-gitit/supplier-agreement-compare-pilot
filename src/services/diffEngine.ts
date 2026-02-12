@@ -2,6 +2,7 @@ import DiffMatchPatch from 'diff-match-patch';
 import type { Difference } from '../types';
 
 const dmp = new DiffMatchPatch();
+const CLAUSE_START_REGEX = /^\s*\d+(?:\.\d+)*\.?(?:\s|$)/;
 
 export type DiffMode = 'character' | 'word' | 'sentence' | 'paragraph';
 
@@ -15,6 +16,31 @@ interface DiffResult {
   };
 }
 
+interface DiffUnitEqual {
+  kind: 'equal';
+  text: string;
+}
+
+interface DiffUnitChange {
+  kind: 'change';
+  id: string;
+  type: 'addition' | 'deletion' | 'modification';
+  originalText: string | null;
+  proposedText: string | null;
+  originalStart: number;
+  originalEnd: number;
+  proposedStart: number;
+  proposedEnd: number;
+}
+
+type DiffUnit = DiffUnitEqual | DiffUnitChange;
+
+interface ChangePart {
+  type: 'addition' | 'deletion' | 'modification';
+  originalText: string | null;
+  proposedText: string | null;
+}
+
 /**
  * Computes differences between two texts using diff-match-patch
  * This is a deterministic algorithm - no AI/LLM involved
@@ -26,9 +52,8 @@ export function computeDiff(
   mode: DiffMode = 'word'
 ): DiffResult {
   const diffs = getDiffs(originalText, proposedText, mode);
-
-  // Convert diff-match-patch format to our Difference format
-  const differences = convertToDifferences(diffs);
+  const units = buildDiffUnits(diffs);
+  const differences = convertUnitsToDifferences(units);
 
   // Calculate summary
   const summary = {
@@ -106,117 +131,41 @@ function adjustToParagraphLevel(diffs: [number, string][]): [number, string][] {
   return diffs;
 }
 
-function convertToDifferences(diffs: [number, string][]): Difference[] {
+function convertUnitsToDifferences(units: DiffUnit[]): Difference[] {
   const differences: Difference[] = [];
-  let originalPosition = 0;
-  let proposedPosition = 0;
-  let diffIndex = 0;
 
-  while (diffIndex < diffs.length) {
-    const [op, text] = diffs[diffIndex];
-
-    // Skip unchanged parts
-    if (op === 0) {
-      originalPosition += text.length;
-      proposedPosition += text.length;
-      diffIndex++;
+  for (let i = 0; i < units.length; i++) {
+    const unit = units[i];
+    if (unit.kind !== 'change') {
       continue;
     }
 
-    // Check if this is a modification (deletion followed by addition)
-    if (
-      op === -1 &&
-      diffIndex + 1 < diffs.length &&
-      diffs[diffIndex + 1][0] === 1
-    ) {
-      // This is a modification
-      const deletedText = text;
-      const addedText = diffs[diffIndex + 1][1];
+    const difference: Difference = {
+      id: unit.id,
+      type: unit.type,
+      originalText: unit.originalText,
+      proposedText: unit.proposedText,
+      context: getContextFromUnits(units, i),
+    };
 
-      differences.push({
-        id: `diff-${differences.length}`,
-        type: 'modification',
-        originalText: deletedText,
-        proposedText: addedText,
-        originalPosition: {
-          start: originalPosition,
-          end: originalPosition + deletedText.length,
-        },
-        proposedPosition: {
-          start: proposedPosition,
-          end: proposedPosition + addedText.length,
-        },
-        context: getContext(diffs, diffIndex),
-      });
-
-      originalPosition += deletedText.length;
-      proposedPosition += addedText.length;
-      diffIndex += 2;
-    } else if (op === -1) {
-      // Pure deletion
-      differences.push({
-        id: `diff-${differences.length}`,
-        type: 'deletion',
-        originalText: text,
-        proposedText: null,
-        originalPosition: {
-          start: originalPosition,
-          end: originalPosition + text.length,
-        },
-        context: getContext(diffs, diffIndex),
-      });
-
-      originalPosition += text.length;
-      diffIndex++;
-    } else if (op === 1) {
-      // Pure addition
-      differences.push({
-        id: `diff-${differences.length}`,
-        type: 'addition',
-        originalText: null,
-        proposedText: text,
-        proposedPosition: {
-          start: proposedPosition,
-          end: proposedPosition + text.length,
-        },
-        context: getContext(diffs, diffIndex),
-      });
-
-      proposedPosition += text.length;
-      diffIndex++;
-    } else {
-      diffIndex++;
+    if (unit.originalText !== null) {
+      difference.originalPosition = {
+        start: unit.originalStart,
+        end: unit.originalEnd,
+      };
     }
+
+    if (unit.proposedText !== null) {
+      difference.proposedPosition = {
+        start: unit.proposedStart,
+        end: unit.proposedEnd,
+      };
+    }
+
+    differences.push(difference);
   }
 
   return differences;
-}
-
-function getContext(diffs: [number, string][], currentIndex: number): string {
-  const contextParts: string[] = [];
-
-  // Get some text before
-  for (let i = Math.max(0, currentIndex - 2); i < currentIndex; i++) {
-    if (diffs[i][0] === 0) {
-      const text = diffs[i][1];
-      contextParts.push(text.slice(-50));
-    }
-  }
-
-  // Get some text after
-  for (
-    let i = currentIndex + 1;
-    i < Math.min(diffs.length, currentIndex + 3);
-    i++
-  ) {
-    if (diffs[i][0] === 0) {
-      const text = diffs[i][1];
-      contextParts.push(text.slice(0, 50));
-      break;
-    }
-  }
-
-  return contextParts.join('...').trim();
 }
 
 /**
@@ -228,40 +177,47 @@ export function generateDiffHTML(
   mode: DiffMode = 'word'
 ): { originalHTML: string; proposedHTML: string } {
   const diffs = getDiffs(originalText, proposedText, mode);
+  const units = buildDiffUnits(diffs);
   let originalHTML = '';
   let proposedHTML = '';
-  let diffId = 0;
 
-  for (let i = 0; i < diffs.length; i++) {
-    const [op, text] = diffs[i];
-    const escapedText = escapeHTML(text);
-
-    if (op === 0) {
-      originalHTML += escapedText;
-      proposedHTML += escapedText;
+  for (const unit of units) {
+    if (unit.kind === 'equal') {
+      const escaped = escapeHTML(unit.text);
+      originalHTML += escaped;
+      proposedHTML += escaped;
       continue;
     }
 
-    if (op === -1 && i + 1 < diffs.length && diffs[i + 1][0] === 1) {
-      const currentId = `diff-${diffId++}`;
-      const deletedText = escapeHTML(diffs[i][1]);
-      const addedText = escapeHTML(diffs[i + 1][1]);
-      originalHTML += wrapDiffSpan(deletedText, 'diff-removed', currentId);
-      proposedHTML += wrapDiffSpan(addedText, 'diff-added', currentId);
-      i++;
+    if (unit.type === 'modification') {
+      originalHTML += wrapDiffSpan(
+        escapeHTML(unit.originalText || ''),
+        'diff-removed',
+        unit.id
+      );
+      proposedHTML += wrapDiffSpan(
+        escapeHTML(unit.proposedText || ''),
+        'diff-added',
+        unit.id
+      );
       continue;
     }
 
-    if (op === -1) {
-      const currentId = `diff-${diffId++}`;
-      originalHTML += wrapDiffSpan(escapedText, 'diff-removed', currentId);
+    if (unit.type === 'deletion') {
+      originalHTML += wrapDiffSpan(
+        escapeHTML(unit.originalText || ''),
+        'diff-removed',
+        unit.id
+      );
       continue;
     }
 
-    if (op === 1) {
-      const currentId = `diff-${diffId++}`;
-      proposedHTML += wrapDiffSpan(escapedText, 'diff-added', currentId);
-      continue;
+    if (unit.type === 'addition') {
+      proposedHTML += wrapDiffSpan(
+        escapeHTML(unit.proposedText || ''),
+        'diff-added',
+        unit.id
+      );
     }
   }
 
@@ -287,39 +243,45 @@ export function generateInlineDiffHTML(
   mode: DiffMode = 'word'
 ): string {
   const diffs = getDiffs(originalText, proposedText, mode);
+  const units = buildDiffUnits(diffs);
 
   let html = '';
-  let diffId = 0;
 
-  for (let i = 0; i < diffs.length; i++) {
-    const [op, text] = diffs[i];
-    const escapedText = escapeHTML(text);
-
-    if (op === 0) {
-      html += escapedText;
+  for (const unit of units) {
+    if (unit.kind === 'equal') {
+      html += escapeHTML(unit.text);
       continue;
     }
 
-    if (op === -1 && i + 1 < diffs.length && diffs[i + 1][0] === 1) {
-      const currentId = `diff-${diffId++}`;
-      const deletedText = escapeHTML(diffs[i][1]);
-      const addedText = escapeHTML(diffs[i + 1][1]);
-      html += wrapDiffSpan(deletedText, 'diff-removed', currentId);
-      html += wrapDiffSpan(addedText, 'diff-added', currentId);
-      i++;
+    if (unit.type === 'modification') {
+      html += wrapDiffSpan(
+        escapeHTML(unit.originalText || ''),
+        'diff-removed',
+        unit.id
+      );
+      html += wrapDiffSpan(
+        escapeHTML(unit.proposedText || ''),
+        'diff-added',
+        unit.id
+      );
       continue;
     }
 
-    if (op === -1) {
-      const currentId = `diff-${diffId++}`;
-      html += wrapDiffSpan(escapedText, 'diff-removed', currentId);
+    if (unit.type === 'deletion') {
+      html += wrapDiffSpan(
+        escapeHTML(unit.originalText || ''),
+        'diff-removed',
+        unit.id
+      );
       continue;
     }
 
-    if (op === 1) {
-      const currentId = `diff-${diffId++}`;
-      html += wrapDiffSpan(escapedText, 'diff-added', currentId);
-      continue;
+    if (unit.type === 'addition') {
+      html += wrapDiffSpan(
+        escapeHTML(unit.proposedText || ''),
+        'diff-added',
+        unit.id
+      );
     }
   }
 
@@ -342,6 +304,439 @@ function getDiffs(
   }
 
   return diffs;
+}
+
+function buildDiffUnits(diffs: [number, string][]): DiffUnit[] {
+  const units: DiffUnit[] = [];
+  let originalPosition = 0;
+  let proposedPosition = 0;
+  let diffIndex = 0;
+  let diffCounter = 0;
+
+  while (diffIndex < diffs.length) {
+    const [op, text] = diffs[diffIndex];
+
+    if (op === 0) {
+      units.push({ kind: 'equal', text });
+      originalPosition += text.length;
+      proposedPosition += text.length;
+      diffIndex++;
+      continue;
+    }
+
+    if (op === -1) {
+      const deletionRun = collectRun(diffs, diffIndex, -1);
+      diffIndex = deletionRun.nextIndex;
+
+      if (diffIndex < diffs.length && diffs[diffIndex][0] === 1) {
+        const additionRun = collectRun(diffs, diffIndex, 1);
+        diffIndex = additionRun.nextIndex;
+
+        const parts = splitChangeRun(deletionRun.text, additionRun.text);
+        for (const part of parts) {
+          const originalStart = originalPosition;
+          const proposedStart = proposedPosition;
+
+          if (part.originalText !== null) {
+            originalPosition += part.originalText.length;
+          }
+          if (part.proposedText !== null) {
+            proposedPosition += part.proposedText.length;
+          }
+
+          units.push({
+            kind: 'change',
+            id: `diff-${diffCounter++}`,
+            type: part.type,
+            originalText: part.originalText,
+            proposedText: part.proposedText,
+            originalStart,
+            originalEnd: originalPosition,
+            proposedStart,
+            proposedEnd: proposedPosition,
+          });
+        }
+      } else {
+        const parts = splitChangeRun(deletionRun.text, '');
+        for (const part of parts) {
+          const originalStart = originalPosition;
+          const proposedStart = proposedPosition;
+
+          if (part.originalText !== null) {
+            originalPosition += part.originalText.length;
+          }
+          if (part.proposedText !== null) {
+            proposedPosition += part.proposedText.length;
+          }
+
+          units.push({
+            kind: 'change',
+            id: `diff-${diffCounter++}`,
+            type: part.type,
+            originalText: part.originalText,
+            proposedText: part.proposedText,
+            originalStart,
+            originalEnd: originalPosition,
+            proposedStart,
+            proposedEnd: proposedPosition,
+          });
+        }
+      }
+      continue;
+    }
+
+    if (op === 1) {
+      const additionRun = collectRun(diffs, diffIndex, 1);
+      diffIndex = additionRun.nextIndex;
+      const parts = splitChangeRun('', additionRun.text);
+
+      for (const part of parts) {
+        const originalStart = originalPosition;
+        const proposedStart = proposedPosition;
+
+        if (part.originalText !== null) {
+          originalPosition += part.originalText.length;
+        }
+        if (part.proposedText !== null) {
+          proposedPosition += part.proposedText.length;
+        }
+
+        units.push({
+          kind: 'change',
+          id: `diff-${diffCounter++}`,
+          type: part.type,
+          originalText: part.originalText,
+          proposedText: part.proposedText,
+          originalStart,
+          originalEnd: originalPosition,
+          proposedStart,
+          proposedEnd: proposedPosition,
+        });
+      }
+      continue;
+    }
+
+    diffIndex++;
+  }
+
+  return units;
+}
+
+function collectRun(
+  diffs: [number, string][],
+  startIndex: number,
+  operation: number
+): { text: string; nextIndex: number } {
+  let index = startIndex;
+  let text = '';
+
+  while (index < diffs.length && diffs[index][0] === operation) {
+    text += diffs[index][1];
+    index++;
+  }
+
+  return { text, nextIndex: index };
+}
+
+function splitChangeRun(deletedText: string, addedText: string): ChangePart[] {
+  if (deletedText && addedText) {
+    return splitModificationRun(deletedText, addedText);
+  }
+
+  if (deletedText) {
+    return splitStructuredText(deletedText).map((part) => ({
+      type: 'deletion',
+      originalText: part,
+      proposedText: null,
+    }));
+  }
+
+  return splitStructuredText(addedText).map((part) => ({
+    type: 'addition',
+    originalText: null,
+    proposedText: part,
+  }));
+}
+
+function splitModificationRun(deletedText: string, addedText: string): ChangePart[] {
+  const deletedParts = splitStructuredText(deletedText);
+  const addedParts = splitStructuredText(addedText);
+
+  if (deletedParts.length === 1 && addedParts.length === 1) {
+    return [
+      {
+        type: 'modification',
+        originalText: deletedText,
+        proposedText: addedText,
+      },
+    ];
+  }
+
+  const parts: ChangePart[] = [];
+  let deletedIndex = 0;
+  let addedIndex = 0;
+
+  while (deletedIndex < deletedParts.length || addedIndex < addedParts.length) {
+    const deletedPart = deletedParts[deletedIndex] || null;
+    const addedPart = addedParts[addedIndex] || null;
+
+    if (deletedPart && addedPart) {
+      if (shouldPairAsModification(deletedPart, addedPart)) {
+        parts.push({
+          type: 'modification',
+          originalText: deletedPart,
+          proposedText: addedPart,
+        });
+        deletedIndex++;
+        addedIndex++;
+        continue;
+      }
+
+      const nextDeletedPart = deletedParts[deletedIndex + 1] || null;
+      const nextAddedPart = addedParts[addedIndex + 1] || null;
+
+      if (nextDeletedPart && shouldPairAsModification(nextDeletedPart, addedPart)) {
+        parts.push({
+          type: 'deletion',
+          originalText: deletedPart,
+          proposedText: null,
+        });
+        deletedIndex++;
+        continue;
+      }
+
+      if (nextAddedPart && shouldPairAsModification(deletedPart, nextAddedPart)) {
+        parts.push({
+          type: 'addition',
+          originalText: null,
+          proposedText: addedPart,
+        });
+        addedIndex++;
+        continue;
+      }
+
+      parts.push({
+        type: 'deletion',
+        originalText: deletedPart,
+        proposedText: null,
+      });
+      parts.push({
+        type: 'addition',
+        originalText: null,
+        proposedText: addedPart,
+      });
+      deletedIndex++;
+      addedIndex++;
+      continue;
+    }
+
+    if (deletedPart) {
+      parts.push({
+        type: 'deletion',
+        originalText: deletedPart,
+        proposedText: null,
+      });
+      deletedIndex++;
+      continue;
+    }
+
+    if (addedPart) {
+      parts.push({
+        type: 'addition',
+        originalText: null,
+        proposedText: addedPart,
+      });
+      addedIndex++;
+    }
+  }
+
+  const compactedParts = coalesceAdjacentParts(parts);
+
+  return compactedParts.length > 0
+    ? compactedParts
+    : [
+        {
+          type: 'modification',
+          originalText: deletedText,
+          proposedText: addedText,
+        },
+      ];
+}
+
+function splitStructuredText(text: string): string[] {
+  if (!text) {
+    return [];
+  }
+
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g);
+  if (!lines || lines.length <= 1) {
+    return [text];
+  }
+
+  const segments: string[] = [];
+  let current = '';
+  let foundBoundary = false;
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    const startsNewClause = CLAUSE_START_REGEX.test(trimmedLine);
+    const isBlankLine = trimmedLine.length === 0;
+
+    if (startsNewClause && current.length > 0) {
+      segments.push(current);
+      current = line;
+      foundBoundary = true;
+      continue;
+    }
+
+    current += line;
+
+    if (isBlankLine && current.length > 0) {
+      segments.push(current);
+      current = '';
+      foundBoundary = true;
+    }
+  }
+
+  if (current.length > 0) {
+    segments.push(current);
+  }
+
+  if (!foundBoundary || segments.length <= 1) {
+    return [text];
+  }
+
+  return segments.filter((segment) => segment.length > 0);
+}
+
+function getContextFromUnits(units: DiffUnit[], currentIndex: number): string {
+  let before = '';
+  let after = '';
+
+  for (let i = currentIndex - 1; i >= 0; i--) {
+    const unit = units[i];
+    if (unit.kind === 'equal' && unit.text.trim().length > 0) {
+      before = unit.text.slice(-50);
+      break;
+    }
+  }
+
+  for (let i = currentIndex + 1; i < units.length; i++) {
+    const unit = units[i];
+    if (unit.kind === 'equal' && unit.text.trim().length > 0) {
+      after = unit.text.slice(0, 50);
+      break;
+    }
+  }
+
+  return [before, after].filter((part) => part.length > 0).join('...').trim();
+}
+
+function shouldPairAsModification(deletedPart: string, addedPart: string): boolean {
+  const deletedClause = extractLeadingClauseId(deletedPart);
+  const addedClause = extractLeadingClauseId(addedPart);
+
+  if (deletedClause && addedClause && deletedClause === addedClause) {
+    return true;
+  }
+
+  return textSimilarity(deletedPart, addedPart) >= 0.34;
+}
+
+function coalesceAdjacentParts(parts: ChangePart[]): ChangePart[] {
+  if (parts.length <= 1) {
+    return parts;
+  }
+
+  const merged: ChangePart[] = [];
+  for (const part of parts) {
+    const previous = merged[merged.length - 1];
+
+    if (previous && canMergeParts(previous, part)) {
+      merged[merged.length - 1] = {
+        type: previous.type,
+        originalText: concatNullable(previous.originalText, part.originalText),
+        proposedText: concatNullable(previous.proposedText, part.proposedText),
+      };
+      continue;
+    }
+
+    merged.push(part);
+  }
+
+  return merged;
+}
+
+function canMergeParts(previous: ChangePart, current: ChangePart): boolean {
+  if (previous.type !== current.type) {
+    return false;
+  }
+
+  const previousText = previous.originalText ?? previous.proposedText ?? '';
+  const currentText = current.originalText ?? current.proposedText ?? '';
+  const previousClause = extractLeadingClauseId(previousText);
+  const currentClause = extractLeadingClauseId(currentText);
+
+  if (previousClause && currentClause) {
+    return previousClause === currentClause;
+  }
+
+  if (previousClause && !currentClause) {
+    return !startsWithMarker(currentText);
+  }
+
+  if (!previousClause && currentClause) {
+    return !startsWithMarker(previousText);
+  }
+
+  return !startsWithMarker(previousText) && !startsWithMarker(currentText);
+}
+
+function startsWithMarker(value: string): boolean {
+  return /^\s*\[(ADD|REP|DEL|REMOVE|INSERT|CHANGE)\b/i.test(value);
+}
+
+function concatNullable(left: string | null, right: string | null): string | null {
+  if (left === null && right === null) {
+    return null;
+  }
+  return `${left ?? ''}${right ?? ''}`;
+}
+
+function extractLeadingClauseId(value: string): string {
+  const match = value.match(/^\s*(\d+(?:\.\d+)*\.?)(?:\s|$)/);
+  if (!match) {
+    return '';
+  }
+  return match[1].replace(/\.$/, '');
+}
+
+function textSimilarity(left: string, right: string): number {
+  const leftWords = toWordSet(left);
+  const rightWords = toWordSet(right);
+
+  if (leftWords.size === 0 || rightWords.size === 0) {
+    return 0;
+  }
+
+  let intersectionCount = 0;
+  for (const word of leftWords) {
+    if (rightWords.has(word)) {
+      intersectionCount++;
+    }
+  }
+
+  const unionCount = new Set([...leftWords, ...rightWords]).size;
+  return unionCount > 0 ? intersectionCount / unionCount : 0;
+}
+
+function toWordSet(value: string): Set<string> {
+  const words = value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length >= 3);
+  return new Set(words);
 }
 
 function wrapDiffSpan(text: string, className: string, diffId: string): string {

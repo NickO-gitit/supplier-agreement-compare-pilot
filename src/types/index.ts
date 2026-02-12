@@ -29,6 +29,37 @@ export interface RiskAnalysis {
   error?: string;
 }
 
+export interface GroupingReview {
+  differenceId: string;
+  quality: 'good' | 'over_grouped' | 'over_split' | 'unclear';
+  suggestedAction: 'keep' | 'split' | 'merge_with_previous' | 'merge_with_next';
+  section: string;
+  summary: string;
+  rationale: string;
+  confidence: number;
+  reviewedAt: Date;
+  status?: 'ok' | 'error';
+  error?: string;
+}
+
+export interface GroupingActionLogItem {
+  sourceDifferenceId: string;
+  appliedAction: 'split' | 'merge_with_previous' | 'merge_with_next';
+  confidence: number;
+  quality: GroupingReview['quality'];
+  section: string;
+  summary: string;
+  resultDifferenceIds: string[];
+}
+
+export interface GroupingActionLog {
+  id: string;
+  runAt: Date;
+  totalReviews: number;
+  appliedCount: number;
+  actions: GroupingActionLogItem[];
+}
+
 export interface Note {
   id: string;
   differenceId: string | null;
@@ -44,6 +75,8 @@ export interface Comparison {
   proposedDocument: Document | null;
   differences: Difference[];
   riskAnalyses: RiskAnalysis[];
+  groupingReviews: GroupingReview[];
+  groupingActionLogs: GroupingActionLog[];
   notes: Note[];
   createdAt: Date;
   status: 'pending' | 'processing' | 'completed' | 'failed';

@@ -28,6 +28,11 @@ export function getComparisons(): Comparison[] {
     return parsed.map((c: Comparison) => ({
       ...c,
       createdAt: new Date(c.createdAt),
+      groupingReviews: c.groupingReviews || [],
+      groupingActionLogs: (c.groupingActionLogs || []).map((log) => ({
+        ...log,
+        runAt: new Date(log.runAt),
+      })),
     }));
   } catch {
     return [];

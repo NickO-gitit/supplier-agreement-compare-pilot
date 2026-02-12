@@ -2,7 +2,9 @@
 
 This project is configured for:
 - `Azure Static Web Apps` hosting
-- `Azure OpenAI` for risk analysis via server-side API (`/api/analyze-risk`)
+- `Azure OpenAI` for:
+  - risk analysis via server-side API (`/api/analyze-risk`)
+  - grouping quality review via server-side API (`/api/review-grouping`)
 
 ## 1) Prerequisites
 
@@ -57,4 +59,8 @@ The script sets these Static Web App app settings:
 - `AZURE_OPENAI_DEPLOYMENT`
 - `AZURE_OPENAI_API_VERSION`
 
-The frontend calls `/api/analyze-risk` when `VITE_RISK_API_URL` is set (default in `.env.example`), so keys stay server-side in Azure.
+The frontend calls:
+- `/api/analyze-risk` when `VITE_RISK_API_URL` is set
+- `/api/review-grouping` when `VITE_GROUPING_REVIEW_API_URL` is set
+
+Defaults are already in `.env.example`, so keys stay server-side in Azure.

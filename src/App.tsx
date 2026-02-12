@@ -7,7 +7,14 @@ import { RiskAnalysisPanel } from './components/RiskAnalysisPanel';
 import { NotesPanel } from './components/NotesPanel';
 import { APIConfigModal } from './components/APIConfigModal';
 import { computeDiff } from './services/diffEngine';
-import { configureRiskAnalysis, isConfigured, analyzeAllRisks } from './services/riskAnalysis';
+import { applyGroupingSuggestions } from './services/groupingAutomation';
+import {
+  configureRiskAnalysis,
+  isConfigured,
+  isGroupingReviewConfigured,
+  analyzeAllRisks,
+  analyzeAllGroupingReviews,
+} from './services/riskAnalysis';
 import {
   saveComparison,
   getAPIConfig,
@@ -17,7 +24,15 @@ import {
   getNotesForComparison,
   generateId,
 } from './services/storage';
-import type { Document, Difference, RiskAnalysis, Note, Comparison } from './types';
+import type {
+  Document,
+  Difference,
+  RiskAnalysis,
+  GroupingReview,
+  GroupingActionLog,
+  Note,
+  Comparison,
+} from './types';
 import type { APIConfig } from './services/storage';
 
 type AppState = 'upload' | 'comparing' | 'results';
@@ -50,13 +65,18 @@ function App() {
   const [proposedDocument, setProposedDocument] = useState<Document | null>(null);
   const [differences, setDifferences] = useState<Difference[]>([]);
   const [riskAnalyses, setRiskAnalyses] = useState<RiskAnalysis[]>([]);
+  const [groupingReviews, setGroupingReviews] = useState<GroupingReview[]>([]);
+  const [groupingActionLogs, setGroupingActionLogs] = useState<GroupingActionLog[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const [comparisonId, setComparisonId] = useState<string | null>(null);
+  const [diffSelectionAnchorMap, setDiffSelectionAnchorMap] = useState<Record<string, string>>({});
 
   const [, setIsComparing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState({ completed: 0, total: 0 });
+  const [isReviewingGrouping, setIsReviewingGrouping] = useState(false);
+  const [groupingReviewProgress, setGroupingReviewProgress] = useState({ completed: 0, total: 0 });
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [apiConfig, setApiConfig] = useState<APIConfig | null>(null);
 
@@ -94,6 +114,9 @@ function App() {
     try {
       const result = computeDiff(originalDocument.text, proposedDocument.text, 'word');
       setDifferences(result.differences);
+      setGroupingReviews([]);
+      setGroupingActionLogs([]);
+      setDiffSelectionAnchorMap({});
 
       // Create comparison record
       const id = generateId();
@@ -105,6 +128,8 @@ function App() {
         proposedDocument,
         differences: result.differences,
         riskAnalyses: [],
+        groupingReviews: [],
+        groupingActionLogs: [],
         notes: [],
         createdAt: new Date(),
         status: 'completed',
@@ -141,6 +166,8 @@ function App() {
           proposedDocument,
           differences,
           riskAnalyses: analyses,
+          groupingReviews,
+          groupingActionLogs,
           notes,
           createdAt: new Date(),
           status: 'completed',
@@ -152,7 +179,92 @@ function App() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [differences, comparisonId, originalDocument, proposedDocument, notes]);
+  }, [
+    differences,
+    comparisonId,
+    originalDocument,
+    proposedDocument,
+    groupingReviews,
+    groupingActionLogs,
+    notes,
+  ]);
+
+  // Run grouping review
+  const handleReviewGrouping = useCallback(async () => {
+    if (differences.length === 0 || !isGroupingReviewConfigured()) return;
+
+    setIsReviewingGrouping(true);
+    setGroupingReviewProgress({ completed: 0, total: differences.length });
+
+    try {
+      const reviews = await analyzeAllGroupingReviews(
+        differences,
+        originalDocument?.text || '',
+        proposedDocument?.text || '',
+        (completed, total) => {
+          setGroupingReviewProgress({ completed, total });
+        }
+      );
+
+      const {
+        differences: improvedDifferences,
+        anchorMap,
+        actionLog,
+      } = applyGroupingSuggestions(differences, reviews);
+
+      const composedAnchors: Record<string, string> = {};
+      Object.entries(anchorMap).forEach(([differenceId, anchorId]) => {
+        composedAnchors[differenceId] = diffSelectionAnchorMap[anchorId] || anchorId;
+      });
+
+      const nextLogs = [actionLog, ...groupingActionLogs];
+      const nextRiskAnalyses = actionLog.appliedCount > 0 ? [] : riskAnalyses;
+      setDifferences(improvedDifferences);
+      setGroupingReviews(reviews);
+      setGroupingActionLogs(nextLogs);
+      setDiffSelectionAnchorMap(composedAnchors);
+      if (actionLog.appliedCount > 0) {
+        setRiskAnalyses([]);
+      }
+
+      if (
+        selectedDiffId &&
+        !improvedDifferences.some((difference) => difference.id === selectedDiffId)
+      ) {
+        setSelectedDiffId(null);
+      }
+
+      if (comparisonId) {
+        const comparison: Comparison = {
+          id: comparisonId,
+          originalDocument,
+          proposedDocument,
+          differences: improvedDifferences,
+          riskAnalyses: nextRiskAnalyses,
+          groupingReviews: reviews,
+          groupingActionLogs: nextLogs,
+          notes,
+          createdAt: new Date(),
+          status: 'completed',
+        };
+        saveComparison(comparison);
+      }
+    } catch (error) {
+      console.error('Grouping review failed:', error);
+    } finally {
+      setIsReviewingGrouping(false);
+    }
+  }, [
+    differences,
+    comparisonId,
+    originalDocument,
+    proposedDocument,
+    riskAnalyses,
+    diffSelectionAnchorMap,
+    groupingActionLogs,
+    notes,
+    selectedDiffId,
+  ]);
 
   // Handle API config save
   const handleSaveAPIConfig = (config: APIConfig) => {
@@ -204,9 +316,12 @@ function App() {
     setProposedDocument(null);
     setDifferences([]);
     setRiskAnalyses([]);
+    setGroupingReviews([]);
+    setGroupingActionLogs([]);
     setNotes([]);
     setSelectedDiffId(null);
     setComparisonId(null);
+    setDiffSelectionAnchorMap({});
   };
 
   // Export report
@@ -263,6 +378,22 @@ function App() {
       );
     }
 
+    if (groupingReviews.length > 0) {
+      const good = groupingReviews.filter((g) => g.quality === 'good').length;
+      const overGrouped = groupingReviews.filter((g) => g.quality === 'over_grouped').length;
+      const overSplit = groupingReviews.filter((g) => g.quality === 'over_split').length;
+      const unclear = groupingReviews.filter((g) => g.quality === 'unclear').length;
+
+      lines.push(
+        'GROUPING REVIEW:',
+        `  - Good: ${good}`,
+        `  - Over-grouped: ${overGrouped}`,
+        `  - Over-split: ${overSplit}`,
+        `  - Unclear/Error: ${unclear}`,
+        ''
+      );
+    }
+
     lines.push(
       '───────────────────────────────────────────────────────────────────',
       '                       DETAILED CHANGES',
@@ -272,6 +403,7 @@ function App() {
 
     differences.forEach((diff, index) => {
       const risk = riskAnalyses.find((r) => r.differenceId === diff.id);
+      const grouping = groupingReviews.find((g) => g.differenceId === diff.id);
       const diffNotes = notes.filter((n) => n.differenceId === diff.id);
 
       lines.push(`CHANGE #${index + 1} - ${diff.type.toUpperCase()}`);
@@ -282,6 +414,16 @@ function App() {
         } else {
           lines.push(`Risk Level: ${risk.riskLevel.toUpperCase()} (${risk.category})`);
         }
+      }
+
+      if (grouping) {
+        lines.push('');
+        lines.push('GROUPING REVIEW:');
+        lines.push(`  Quality: ${grouping.quality}`);
+        lines.push(`  Suggested Action: ${grouping.suggestedAction}`);
+        lines.push(`  Section: ${grouping.section}`);
+        lines.push(`  Summary: ${grouping.summary}`);
+        lines.push(`  Rationale: ${grouping.rationale}`);
       }
 
       lines.push('');
@@ -494,9 +636,16 @@ function App() {
                   proposedText={proposedDocument?.text || ''}
                   differences={differences}
                   riskAnalyses={riskAnalyses}
+                  groupingReviews={groupingReviews}
+                  groupingActionLogs={groupingActionLogs}
                   notes={notes}
                   selectedDiffId={selectedDiffId}
+                  selectionAnchorMap={diffSelectionAnchorMap}
                   onSelectDiff={setSelectedDiffId}
+                  onReviewGrouping={handleReviewGrouping}
+                  isReviewingGrouping={isReviewingGrouping}
+                  groupingReviewProgress={groupingReviewProgress}
+                  canReviewGrouping={isGroupingReviewConfigured()}
                 />
               </div>
 
