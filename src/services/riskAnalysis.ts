@@ -34,23 +34,14 @@ export function configureRiskAnalysis(newConfig: OpenAIConfig) {
 }
 
 export function isConfigured(): boolean {
-  return config !== null && !!config.apiKey;
+  return hasRiskProxyConfigured() || (config !== null && !!config.apiKey);
 }
 
 export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis> {
-  if (!config || !config.apiKey) {
-    throw new Error('Risk analysis not configured. Please provide API key.');
-  }
-
-  const prompt = RISK_ANALYSIS_PROMPT
-    .replace('{changeType}', difference.type)
-    .replace('{originalText}', difference.originalText || '[None - New Addition]')
-    .replace('{proposedText}', difference.proposedText || '[None - Deleted]')
-    .replace('{context}', difference.context || '[No surrounding context]');
-
   try {
-    const response = await callOpenAI(prompt);
-    const parsed = parseRiskResponse(response);
+    const parsed = hasRiskProxyConfigured()
+      ? await callRiskProxy(difference)
+      : await analyzeWithDirectApi(difference);
 
     return {
       differenceId: difference.id,
@@ -79,6 +70,21 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
+}
+
+async function analyzeWithDirectApi(difference: Difference): Promise<Record<string, unknown>> {
+  if (!config || !config.apiKey) {
+    throw new Error('Risk analysis not configured. Please provide API key.');
+  }
+
+  const prompt = RISK_ANALYSIS_PROMPT
+    .replace('{changeType}', difference.type)
+    .replace('{originalText}', difference.originalText || '[None - New Addition]')
+    .replace('{proposedText}', difference.proposedText || '[None - Deleted]')
+    .replace('{context}', difference.context || '[No surrounding context]');
+
+  const response = await callOpenAI(prompt);
+  return parseRiskResponse(response);
 }
 
 export async function analyzeAllRisks(
@@ -158,6 +164,33 @@ async function callOpenAI(prompt: string): Promise<string> {
   return content;
 }
 
+async function callRiskProxy(difference: Difference): Promise<Record<string, unknown>> {
+  const riskProxyUrl = getRiskProxyUrl();
+  if (!riskProxyUrl) {
+    throw new Error('Risk proxy is not configured.');
+  }
+
+  const response = await fetch(riskProxyUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ difference }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Risk proxy error: ${error}`);
+  }
+
+  const data = await response.json();
+  if (!data || typeof data !== 'object') {
+    throw new Error('Risk proxy returned invalid response.');
+  }
+
+  return data as Record<string, unknown>;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -186,6 +219,19 @@ function parseRiskResponse(raw: string): Record<string, unknown> {
     }
     throw new Error('Invalid JSON response from model');
   }
+}
+
+function getRiskProxyUrl(): string | null {
+  const value = import.meta.env.VITE_RISK_API_URL;
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function hasRiskProxyConfigured(): boolean {
+  return !!getRiskProxyUrl();
 }
 
 /**

@@ -21,6 +21,28 @@ import type { Document, Difference, RiskAnalysis, Note, Comparison } from './typ
 import type { APIConfig } from './services/storage';
 
 type AppState = 'upload' | 'comparing' | 'results';
+const env = import.meta.env;
+
+function getAPIConfigFromEnv(): APIConfig | null {
+  if (env.VITE_OPENAI_API_KEY) {
+    return {
+      apiKey: env.VITE_OPENAI_API_KEY,
+      isAzure: false,
+      model: env.VITE_OPENAI_MODEL || 'gpt-4.1-mini',
+    };
+  }
+
+  if (env.VITE_AZURE_OPENAI_KEY && env.VITE_AZURE_OPENAI_ENDPOINT && env.VITE_AZURE_OPENAI_DEPLOYMENT) {
+    return {
+      apiKey: env.VITE_AZURE_OPENAI_KEY,
+      isAzure: true,
+      endpoint: env.VITE_AZURE_OPENAI_ENDPOINT,
+      deploymentName: env.VITE_AZURE_OPENAI_DEPLOYMENT,
+    };
+  }
+
+  return null;
+}
 
 function App() {
   const [appState, setAppState] = useState<AppState>('upload');
@@ -40,9 +62,15 @@ function App() {
 
   // Load API config on mount
   useEffect(() => {
-    const config = getAPIConfig();
+    const savedConfig = getAPIConfig();
+    const config = savedConfig || getAPIConfigFromEnv();
+
     if (config) {
-      setApiConfig(config);
+      if (savedConfig) {
+        setApiConfig(savedConfig);
+      } else {
+        setApiConfig(config);
+      }
       configureRiskAnalysis({
         apiKey: config.apiKey,
         isAzure: config.isAzure,
