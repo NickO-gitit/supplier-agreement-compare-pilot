@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Key, Server, HelpCircle } from 'lucide-react';
 import type { APIConfig } from '../services/storage';
 
@@ -16,14 +16,24 @@ export function APIConfigModal({ isOpen, onClose, onSave, currentConfig }: APICo
   const [deploymentName, setDeploymentName] = useState(currentConfig?.deploymentName ?? '');
   const [model, setModel] = useState(currentConfig?.model ?? 'gpt-4.1-mini');
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setIsAzure(currentConfig?.isAzure ?? false);
+    setApiKey(currentConfig?.apiKey ?? '');
+    setEndpoint(currentConfig?.endpoint ?? '');
+    setDeploymentName(currentConfig?.deploymentName ?? '');
+    setModel(currentConfig?.model ?? 'gpt-4.1-mini');
+  }, [isOpen, currentConfig]);
+
   if (!isOpen) return null;
 
   const handleSave = () => {
     const config: APIConfig = {
-      apiKey,
+      apiKey: apiKey.trim(),
       isAzure,
-      endpoint: isAzure ? endpoint : undefined,
-      deploymentName: isAzure ? deploymentName : undefined,
+      endpoint: isAzure ? endpoint.trim() : undefined,
+      deploymentName: isAzure ? deploymentName.trim() : undefined,
       model: !isAzure && model.trim() ? model.trim() : undefined,
     };
     onSave(config);

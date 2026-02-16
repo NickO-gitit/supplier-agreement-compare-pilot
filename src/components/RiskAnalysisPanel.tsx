@@ -1,42 +1,142 @@
-import { AlertTriangle, CheckCircle, AlertCircle, Loader2, Shield, Zap, Settings } from 'lucide-react';
-import type { Difference, RiskAnalysis } from '../types';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, CheckCircle, AlertCircle, Loader2, Shield, Zap, Settings, MessageSquare, ArrowDownUp, RefreshCw, Download, StickyNote, X } from 'lucide-react';
+import type { Difference, RiskAnalysis, Note } from '../types';
+import { askRiskFollowUp } from '../services/riskAnalysis';
+import { NotesPanel } from './NotesPanel';
 
 interface RiskAnalysisPanelProps {
   differences: Difference[];
   riskAnalyses: RiskAnalysis[];
+  notes: Note[];
   selectedDiffId: string | null;
   isAnalyzing: boolean;
   analysisProgress: { completed: number; total: number };
   onAnalyze: () => void;
   isConfigured: boolean;
   onConfigure: () => void;
+  onOpenSettings: () => void;
+  onExport: () => void;
+  canExport: boolean;
+  onNewComparison: () => void;
   onSelectDiff: (id: string) => void;
+  onAddNote: (note: Note) => void;
+  onUpdateNote: (note: Note) => void;
+  onDeleteNote: (noteId: string) => void;
 }
 
 export function RiskAnalysisPanel({
   differences,
   riskAnalyses,
+  notes,
   selectedDiffId,
   isAnalyzing,
   analysisProgress,
   onAnalyze,
   isConfigured,
   onConfigure,
+  onOpenSettings,
+  onExport,
+  canExport,
+  onNewComparison,
   onSelectDiff,
+  onAddNote,
+  onUpdateNote,
+  onDeleteNote,
 }: RiskAnalysisPanelProps) {
+  const [riskOrderMode, setRiskOrderMode] = useState<'risk' | 'document'>(() => {
+    try {
+      const saved = localStorage.getItem('risk-order-mode');
+      return saved === 'document' ? 'document' : 'risk';
+    } catch {
+      return 'risk';
+    }
+  });
+  const [notesDiffId, setNotesDiffId] = useState<string | null>(null);
+  const [followUpQuestion, setFollowUpQuestion] = useState('');
+  const [isAskingFollowUp, setIsAskingFollowUp] = useState(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
+  const [followUpByDifference, setFollowUpByDifference] = useState<
+    Record<string, Array<{ question: string; answer: string; askedAt: Date }>>
+  >({});
+
+  useEffect(() => {
+    setFollowUpQuestion('');
+    setFollowUpError(null);
+  }, [selectedDiffId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('risk-order-mode', riskOrderMode);
+    } catch {
+      // Ignore localStorage errors.
+    }
+  }, [riskOrderMode]);
+
   const selectedRisk = selectedDiffId
     ? riskAnalyses.find((r) => r.differenceId === selectedDiffId)
     : null;
+  const selectedDifference = selectedDiffId
+    ? differences.find((d) => d.id === selectedDiffId) || null
+    : null;
   const selectedIsError = selectedRisk?.status === 'error';
+  const selectedFollowUps =
+    selectedDiffId && followUpByDifference[selectedDiffId]
+      ? followUpByDifference[selectedDiffId]
+      : [];
 
   const analyzedRisks = riskAnalyses.filter((r) => r.status !== 'error');
   const errorCount = riskAnalyses.filter((r) => r.status === 'error').length;
+  const differenceOrder = new Map(differences.map((difference, index) => [difference.id, index]));
+  const riskIndexOrder = new Map(
+    riskAnalyses.map((riskAnalysis, index) => [riskAnalysis.differenceId, index])
+  );
+  const notesByDifference = notes.reduce<Record<string, number>>((accumulator, note) => {
+    if (note.differenceId) {
+      accumulator[note.differenceId] = (accumulator[note.differenceId] || 0) + 1;
+    }
+    return accumulator;
+  }, {});
 
   const summary = {
     high: analyzedRisks.filter((r) => r.riskLevel === 'high').length,
     medium: analyzedRisks.filter((r) => r.riskLevel === 'medium').length,
     low: analyzedRisks.filter((r) => r.riskLevel === 'low').length,
   };
+  const orderedRisks = useMemo(() => {
+    const rank = (risk: RiskAnalysis): number => {
+      if (risk.status === 'error') return 3;
+      if (risk.riskLevel === 'high') return 0;
+      if (risk.riskLevel === 'medium') return 1;
+      if (risk.riskLevel === 'low') return 2;
+      return 3;
+    };
+
+    return [...riskAnalyses].sort((left, right) => {
+      const leftOrder =
+        differenceOrder.get(left.differenceId) ??
+        riskIndexOrder.get(left.differenceId) ??
+        Number.MAX_SAFE_INTEGER;
+      const rightOrder =
+        differenceOrder.get(right.differenceId) ??
+        riskIndexOrder.get(right.differenceId) ??
+        Number.MAX_SAFE_INTEGER;
+
+      if (riskOrderMode === 'document') {
+        return leftOrder - rightOrder;
+      }
+
+      const rankDelta = rank(left) - rank(right);
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+
+      if (leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+
+      return leftOrder - rightOrder;
+    });
+  }, [differenceOrder, riskAnalyses, riskIndexOrder, riskOrderMode]);
 
   const getRiskIcon = (level: string, isError?: boolean) => {
     if (isError) {
@@ -67,6 +167,37 @@ export function RiskAnalysisPanel({
         return 'bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200';
       default:
         return 'bg-slate-50 border-slate-200';
+    }
+  };
+
+  const handleAskFollowUp = async () => {
+    if (!selectedDiffId || !selectedRisk || !selectedDifference) {
+      return;
+    }
+
+    const question = followUpQuestion.trim();
+    if (!question) {
+      setFollowUpError('Enter a question first.');
+      return;
+    }
+
+    setIsAskingFollowUp(true);
+    setFollowUpError(null);
+
+    try {
+      const answer = await askRiskFollowUp(selectedDifference, selectedRisk, question);
+      setFollowUpByDifference((previous) => ({
+        ...previous,
+        [selectedDiffId]: [
+          ...(previous[selectedDiffId] || []),
+          { question, answer, askedAt: new Date() },
+        ],
+      }));
+      setFollowUpQuestion('');
+    } catch (error) {
+      setFollowUpError(error instanceof Error ? error.message : 'Failed to get follow-up answer.');
+    } finally {
+      setIsAskingFollowUp(false);
     }
   };
 
@@ -154,12 +285,66 @@ export function RiskAnalysisPanel({
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="relative flex flex-col h-full">
       {/* Header */}
       <div className="px-5 py-4 border-b border-slate-100">
-        <div className="flex items-center gap-2">
-          <Shield className="w-5 h-5 text-indigo-600" />
-          <h3 className="font-semibold text-slate-800">Risk Analysis</h3>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Shield className="w-5 h-5 text-indigo-600" />
+            <h3 className="font-semibold text-slate-800">Risk Analysis</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onExport()}
+              disabled={!canExport}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-slate-100 text-slate-700 rounded-lg border border-slate-200 hover:bg-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Export report"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export
+            </button>
+            <button
+              onClick={onOpenSettings}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-slate-100 text-slate-700 rounded-lg border border-slate-200 hover:bg-slate-200 transition-colors"
+              title="Open settings"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              Settings
+            </button>
+            <button
+              onClick={onNewComparison}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-slate-100 text-slate-700 rounded-lg border border-slate-200 hover:bg-slate-200 transition-colors"
+              title="Start a new comparison"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              New
+            </button>
+            <div className="inline-flex items-center rounded-lg border border-slate-200 overflow-hidden">
+              <button
+                onClick={() => setRiskOrderMode('risk')}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  riskOrderMode === 'risk'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+                title="Sort by risk level"
+              >
+                <ArrowDownUp className="w-3.5 h-3.5" />
+                High to Low
+              </button>
+              <button
+                onClick={() => setRiskOrderMode('document')}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border-l border-slate-200 transition-colors ${
+                  riskOrderMode === 'document'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+                title="Sort by document order"
+              >
+                Document
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -187,9 +372,8 @@ export function RiskAnalysisPanel({
         )}
       </div>
 
-      {/* Selected Risk Detail */}
-      {selectedRisk ? (
-        <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-4 space-y-4">
+        {selectedRisk ? (
           <div className={`p-4 rounded-xl border-2 ${getRiskBgColor(selectedRisk.riskLevel, selectedIsError)}`}>
             <div className="flex items-center gap-2 mb-4">
               {getRiskIcon(selectedRisk.riskLevel, selectedIsError)}
@@ -223,62 +407,131 @@ export function RiskAnalysisPanel({
                   <p className="text-sm text-slate-600">{selectedRisk.error}</p>
                 </div>
               )}
+
+              {!selectedIsError && (
+                <div className="pt-2 border-t border-slate-200/70">
+                  <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                    Ask AI About This Risk
+                  </h4>
+                  <textarea
+                    value={followUpQuestion}
+                    onChange={(event) => setFollowUpQuestion(event.target.value)}
+                    placeholder="Ask a follow-up question for this specific risk analysis..."
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white/80 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  {followUpError && (
+                    <p className="text-xs text-red-600 mt-2">{followUpError}</p>
+                  )}
+                  <button
+                    onClick={handleAskFollowUp}
+                    disabled={isAskingFollowUp || followUpQuestion.trim().length === 0}
+                    className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-200 hover:bg-indigo-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isAskingFollowUp ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    )}
+                    {isAskingFollowUp ? 'Asking...' : 'Ask AI'}
+                  </button>
+
+                  {selectedFollowUps.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {selectedFollowUps.map((item, index) => (
+                        <div key={`${selectedDiffId}-followup-${index}`} className="p-2 rounded-lg bg-white/70 border border-slate-200">
+                          <p className="text-xs font-semibold text-slate-600">Q: {item.question}</p>
+                          <p className="text-sm text-slate-700 mt-1">A: {item.answer}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 overflow-auto p-4">
-          <p className="text-sm text-slate-500 text-center mb-4">
-            Select a change to see its risk analysis
+        ) : (
+          <p className="text-sm text-slate-500 text-center">
+            Select a change to see full risk details
           </p>
+        )}
 
-          {/* High Risk List */}
-          {summary.high > 0 && (
-            <div className="space-y-2">
-              <h4 className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-2">High Risk Items</h4>
-              {riskAnalyses
-                .filter((r) => r.riskLevel === 'high' && r.status !== 'error')
-                .map((risk) => (
-                  <div
-                    key={risk.differenceId}
-                    onClick={() => onSelectDiff(risk.differenceId)}
-                    className={`p-3 bg-gradient-to-br from-red-50 to-rose-50 rounded-xl border border-red-200 cursor-pointer hover:border-red-300 transition-colors ${
-                      selectedDiffId === risk.differenceId ? 'ring-2 ring-red-200' : ''
-                    }`}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+              All Risks ({orderedRisks.length})
+            </h4>
+            <span className="text-[11px] font-medium text-slate-500">
+              Sorted by: {riskOrderMode === 'risk' ? 'Risk Level' : 'Document Order'}
+            </span>
+          </div>
+          {orderedRisks.map((risk) => {
+            const isError = risk.status === 'error';
+            const selected = selectedDiffId === risk.differenceId;
+            const noteCount = notesByDifference[risk.differenceId] || 0;
+            return (
+              <div
+                key={risk.differenceId}
+                onClick={() => onSelectDiff(risk.differenceId)}
+                className={`p-3 rounded-xl border cursor-pointer transition-colors ${
+                  selected ? 'ring-2 ring-indigo-200 border-indigo-300' : ''
+                } ${getRiskBgColor(risk.riskLevel, isError)} hover:border-slate-300`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  {getRiskIcon(risk.riskLevel, isError)}
+                  <span className="text-sm font-semibold text-slate-800 capitalize">
+                    {isError ? 'Analysis Error' : `${risk.riskLevel} Risk`}
+                  </span>
+                  <span className="px-2 py-0.5 bg-white/60 rounded-lg text-xs font-medium text-slate-600">
+                    {risk.category}
+                  </span>
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectDiff(risk.differenceId);
+                      setNotesDiffId(risk.differenceId);
+                    }}
+                    className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium bg-white/80 text-slate-700 rounded-lg border border-slate-200 hover:bg-white transition-colors"
+                    title="Open notes for this risk"
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <AlertTriangle className="w-4 h-4 text-red-500" />
-                      <span className="text-sm font-semibold text-red-800">{risk.category}</span>
-                    </div>
-                    <p className="text-sm text-red-700 line-clamp-2">{risk.explanation}</p>
-                  </div>
-                ))}
-            </div>
-          )}
+                    <StickyNote className="w-3 h-3" />
+                    Notes {noteCount > 0 ? `(${noteCount})` : ''}
+                  </button>
+                </div>
+                <p className="text-sm text-slate-700 line-clamp-2">{risk.explanation}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
-          {/* Analysis Errors */}
-          {errorCount > 0 && (
-            <div className={`space-y-2 ${summary.high > 0 ? 'mt-4' : ''}`}>
-              <h4 className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Analysis Errors</h4>
-              {riskAnalyses
-                .filter((r) => r.status === 'error')
-                .map((risk) => (
-                  <div
-                    key={risk.differenceId}
-                    onClick={() => onSelectDiff(risk.differenceId)}
-                    className={`p-3 bg-slate-50 rounded-xl border border-slate-200 cursor-pointer hover:border-slate-300 transition-colors ${
-                      selectedDiffId === risk.differenceId ? 'ring-2 ring-slate-200' : ''
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <AlertTriangle className="w-4 h-4 text-slate-400" />
-                      <span className="text-sm font-semibold text-slate-700">{risk.category}</span>
-                    </div>
-                    <p className="text-sm text-slate-600 line-clamp-2">{risk.explanation}</p>
-                  </div>
-                ))}
+      {notesDiffId && (
+        <div className="absolute inset-0 z-20 bg-slate-900/25 p-4">
+          <div className="h-full bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <StickyNote className="w-4 h-4 text-amber-500" />
+                <h4 className="text-sm font-semibold text-slate-800">Notes for Selected Risk</h4>
+              </div>
+              <button
+                onClick={() => setNotesDiffId(null)}
+                className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
+                title="Close notes"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          )}
+            <div className="flex-1 min-h-0">
+              <NotesPanel
+                notes={notes}
+                selectedDiffId={notesDiffId}
+                differences={differences}
+                onAddNote={onAddNote}
+                onUpdateNote={onUpdateNote}
+                onDeleteNote={onDeleteNote}
+              />
+            </div>
+          </div>
         </div>
       )}
 

@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowRight, Loader2, RefreshCw, Zap, FileSearch, Shield, Plus, Minus, PenLine } from 'lucide-react';
+import { ArrowRight, Loader2, Zap, FileSearch, Shield } from 'lucide-react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
 import { DiffViewer } from './components/DiffViewer';
 import { RiskAnalysisPanel } from './components/RiskAnalysisPanel';
-import { NotesPanel } from './components/NotesPanel';
 import { APIConfigModal } from './components/APIConfigModal';
 import { computeDiff } from './services/diffEngine';
 import { applyGroupingSuggestions } from './services/groupingAutomation';
@@ -480,14 +479,16 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header
-        onOpenSettings={() => setShowConfigModal(true)}
-        onExport={handleExport}
-        canExport={appState === 'results' && differences.length > 0}
-      />
+    <div className="h-screen flex flex-col overflow-hidden">
+      {appState !== 'results' && (
+        <Header
+          onOpenSettings={() => setShowConfigModal(true)}
+          onExport={handleExport}
+          canExport={false}
+        />
+      )}
 
-      <main className="flex-1 p-6">
+      <main className={appState === 'results' ? 'flex-1 p-0 overflow-hidden' : 'flex-1 p-6 overflow-auto'}>
         {/* Upload State */}
         {appState === 'upload' && (
           <div className="max-w-5xl mx-auto animate-fadeIn">
@@ -582,55 +583,11 @@ function App() {
 
         {/* Results State */}
         {appState === 'results' && (
-          <div className="h-[calc(100vh-160px)] animate-fadeIn">
-            {/* Summary Bar */}
-            <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl shadow-purple-500/10 p-5 mb-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-8">
-                  <div>
-                    <span className="text-4xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                      {differences.length}
-                    </span>
-                    <span className="text-slate-500 ml-3 text-lg">changes found</span>
-                  </div>
-                  <div className="flex items-center gap-5">
-                    <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 rounded-xl border border-emerald-200">
-                      <Plus className="w-4 h-4 text-emerald-600" />
-                      <span className="font-semibold text-emerald-700">
-                        {differences.filter((d) => d.type === 'addition').length}
-                      </span>
-                      <span className="text-emerald-600 text-sm">additions</span>
-                    </div>
-                    <div className="flex items-center gap-2 px-4 py-2 bg-red-50 rounded-xl border border-red-200">
-                      <Minus className="w-4 h-4 text-red-600" />
-                      <span className="font-semibold text-red-700">
-                        {differences.filter((d) => d.type === 'deletion').length}
-                      </span>
-                      <span className="text-red-600 text-sm">deletions</span>
-                    </div>
-                    <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 rounded-xl border border-amber-200">
-                      <PenLine className="w-4 h-4 text-amber-600" />
-                      <span className="font-semibold text-amber-700">
-                        {differences.filter((d) => d.type === 'modification').length}
-                      </span>
-                      <span className="text-amber-600 text-sm">modifications</span>
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={handleReset}
-                  className="flex items-center gap-2 px-5 py-2.5 text-slate-600 bg-white border-2 border-slate-200 rounded-xl hover:border-slate-300 hover:bg-slate-50 transition-all duration-200 font-medium"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  New Comparison
-                </button>
-              </div>
-            </div>
-
+          <div className="h-full min-h-0 animate-fadeIn">
             {/* Main Content */}
-            <div className="grid grid-cols-12 gap-5 h-[calc(100%-100px)]">
+            <div className="grid grid-cols-12 gap-5 h-full min-h-0 p-5">
               {/* Diff Viewer - Main Panel */}
-              <div className="col-span-7 bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl shadow-purple-500/10 overflow-hidden">
+              <div className="col-span-7 min-h-0 bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl shadow-purple-500/10 overflow-hidden">
                 <DiffViewer
                   originalText={originalDocument?.text || ''}
                   proposedText={proposedDocument?.text || ''}
@@ -650,28 +607,24 @@ function App() {
               </div>
 
               {/* Right Sidebar */}
-              <div className="col-span-5 flex flex-col gap-5">
+              <div className="col-span-5 min-h-0 overflow-hidden">
                 {/* Risk Analysis Panel */}
-                <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl shadow-purple-500/10 flex-1 overflow-hidden">
+                <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl shadow-purple-500/10 h-full min-h-0 overflow-hidden">
                   <RiskAnalysisPanel
                     differences={differences}
                     riskAnalyses={riskAnalyses}
+                    notes={notes}
                     selectedDiffId={selectedDiffId}
                     isAnalyzing={isAnalyzing}
                     analysisProgress={analysisProgress}
                     onAnalyze={handleAnalyzeRisks}
                     isConfigured={isConfigured()}
                     onConfigure={() => setShowConfigModal(true)}
+                    onOpenSettings={() => setShowConfigModal(true)}
+                    onExport={handleExport}
+                    canExport={differences.length > 0}
+                    onNewComparison={handleReset}
                     onSelectDiff={setSelectedDiffId}
-                  />
-                </div>
-
-                {/* Notes Panel */}
-                <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl shadow-purple-500/10 flex-1 overflow-hidden">
-                  <NotesPanel
-                    notes={notes}
-                    selectedDiffId={selectedDiffId}
-                    differences={differences}
                     onAddNote={handleAddNote}
                     onUpdateNote={handleUpdateNote}
                     onDeleteNote={handleDeleteNote}

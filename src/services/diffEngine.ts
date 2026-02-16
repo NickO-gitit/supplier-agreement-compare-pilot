@@ -3,6 +3,9 @@ import type { Difference } from '../types';
 
 const dmp = new DiffMatchPatch();
 const CLAUSE_START_REGEX = /^\s*\d+(?:\.\d+)*\.?(?:\s|$)/;
+const INLINE_CLAUSE_BOUNDARY_REGEX = /(?<=[\].;:!?])\s+(?=\d+(?:\.\d+)+\.?\s)/g;
+const INLINE_MARKER_BOUNDARY_REGEX = /\s+(?=\[(?:ADD|REP|DEL|REMOVE|INSERT|CHANGE)\s*:)/gi;
+const INLINE_BULLET_BOUNDARY_REGEX = /(?<=[.;!?])\s+(?=-\s+[A-Za-z\[])/g;
 
 export type DiffMode = 'character' | 'word' | 'sentence' | 'paragraph';
 
@@ -70,6 +73,9 @@ function normalizeText(text: string): string {
   return text
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
+    .replace(INLINE_CLAUSE_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_MARKER_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_BULLET_BOUNDARY_REGEX, '\n')
     .trim();
 }
 
@@ -887,7 +893,11 @@ function splitStructuredText(text: string): string[] {
     return [];
   }
 
-  const lines = text.match(/[^\n]*\n|[^\n]+$/g);
+  const lines = text
+    .replace(INLINE_CLAUSE_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_MARKER_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_BULLET_BOUNDARY_REGEX, '\n')
+    .match(/[^\n]*\n|[^\n]+$/g);
   if (!lines || lines.length <= 1) {
     return [text];
   }
@@ -899,9 +909,10 @@ function splitStructuredText(text: string): string[] {
   for (const line of lines) {
     const trimmedLine = line.trim();
     const startsNewClause = CLAUSE_START_REGEX.test(trimmedLine);
+    const startsMarkerDirective = startsWithMarker(trimmedLine);
     const isBlankLine = trimmedLine.length === 0;
 
-    if (startsNewClause && current.length > 0) {
+    if ((startsNewClause || startsMarkerDirective) && current.length > 0) {
       segments.push(current);
       current = line;
       foundBoundary = true;
@@ -983,6 +994,12 @@ function getContextFromUnits(units: DiffUnit[], currentIndex: number): string {
 }
 
 function shouldPairAsModification(deletedPart: string, addedPart: string): boolean {
+  const deletedHasMarker = containsMarkerDirective(deletedPart);
+  const addedHasMarker = containsMarkerDirective(addedPart);
+  if (deletedHasMarker !== addedHasMarker) {
+    return false;
+  }
+
   const deletedClause = extractLeadingClauseId(deletedPart);
   const addedClause = extractLeadingClauseId(addedPart);
 
@@ -1044,6 +1061,10 @@ function canMergeParts(previous: ChangePart, current: ChangePart): boolean {
 
 function startsWithMarker(value: string): boolean {
   return /^\s*\[(ADD|REP|DEL|REMOVE|INSERT|CHANGE)\b/i.test(value);
+}
+
+function containsMarkerDirective(value: string): boolean {
+  return /\[(ADD|REP|DEL|REMOVE|INSERT|CHANGE)\s*:/i.test(value);
 }
 
 function concatNullable(left: string | null, right: string | null): string | null {

@@ -53,6 +53,30 @@ Original context around selected change:
 Proposed context around selected change:
 {proposedContext}`;
 
+const RISK_FOLLOWUP_PROMPT = `You are a legal contract assistant.
+You are answering a follow-up question about ONE specific contract change and its prior risk analysis.
+
+Change Type: {changeType}
+Original Text: {originalText}
+Proposed Text: {proposedText}
+Context: {context}
+
+Prior Risk Analysis:
+- Risk Level: {riskLevel}
+- Category: {category}
+- What Changed: {explanation}
+- Legal Implication: {legalImplication}
+- Recommendation: {recommendation}
+
+User Question:
+{question}
+
+Instructions:
+- Answer only the question asked.
+- Keep the answer concise and practical.
+- Use plain text (not JSON).
+- If legal uncertainty remains, state that clearly.`;
+
 interface OpenAIConfig {
   apiKey: string;
   endpoint?: string; // For Azure OpenAI
@@ -142,7 +166,7 @@ async function analyzeWithDirectApi(difference: Difference): Promise<Record<stri
     .replace('{proposedText}', difference.proposedText || '[None - Deleted]')
     .replace('{context}', difference.context || '[No surrounding context]');
 
-  const response = await callOpenAI(prompt);
+  const response = await callOpenAIJson(prompt);
   return parseRiskResponse(response);
 }
 
@@ -168,6 +192,48 @@ export async function analyzeAllRisks(
   }
 
   return results;
+}
+
+export async function askRiskFollowUp(
+  difference: Difference,
+  riskAnalysis: RiskAnalysis,
+  question: string
+): Promise<string> {
+  const trimmedQuestion = question.trim();
+  if (!trimmedQuestion) {
+    throw new Error('Question is required.');
+  }
+
+  if (hasRiskFollowupProxyConfigured()) {
+    const parsed = await callRiskFollowupProxy(difference, riskAnalysis, trimmedQuestion);
+    const answer = stringOrFallback(parsed.answer, '');
+    if (!answer) {
+      throw new Error('Follow-up proxy returned an empty answer.');
+    }
+    return answer;
+  }
+
+  if (!config || !config.apiKey) {
+    throw new Error('Risk follow-up is not configured. Please provide API key.');
+  }
+
+  const prompt = RISK_FOLLOWUP_PROMPT
+    .replace('{changeType}', difference.type)
+    .replace('{originalText}', difference.originalText || '[None - New Addition]')
+    .replace('{proposedText}', difference.proposedText || '[None - Deleted]')
+    .replace('{context}', difference.context || '[No surrounding context]')
+    .replace('{riskLevel}', riskAnalysis.riskLevel)
+    .replace('{category}', riskAnalysis.category)
+    .replace('{explanation}', riskAnalysis.explanation)
+    .replace('{legalImplication}', riskAnalysis.legalImplication)
+    .replace('{recommendation}', riskAnalysis.recommendation)
+    .replace('{question}', trimmedQuestion);
+
+  const raw = await callOpenAIText(
+    prompt,
+    'You are a legal expert specializing in commercial contract analysis.'
+  );
+  return parseFollowUpAnswer(raw);
 }
 
 export function isGroupingReviewConfigured(): boolean {
@@ -276,11 +342,47 @@ async function analyzeGroupingWithDirectApi(
     .replace('{originalContext}', payload.originalContext || '[Not available]')
     .replace('{proposedContext}', payload.proposedContext || '[Not available]');
 
-  const response = await callOpenAI(prompt);
+  const response = await callOpenAIJson(prompt);
   return parseRiskResponse(response);
 }
 
-async function callOpenAI(prompt: string): Promise<string> {
+async function callOpenAIJson(prompt: string): Promise<string> {
+  return callOpenAIWithMessages(
+    [
+      {
+        role: 'system',
+        content:
+          'You are a legal expert specializing in commercial contract analysis. Always respond with valid JSON only.',
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+    { temperature: 0.3, maxTokens: 500, expectJson: true }
+  );
+}
+
+async function callOpenAIText(prompt: string, systemContent: string): Promise<string> {
+  return callOpenAIWithMessages(
+    [
+      {
+        role: 'system',
+        content: systemContent,
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ],
+    { temperature: 0.2, maxTokens: 700, expectJson: false }
+  );
+}
+
+async function callOpenAIWithMessages(
+  messages: Array<{ role: 'system' | 'user'; content: string }>,
+  options: { temperature: number; maxTokens: number; expectJson: boolean }
+): Promise<string> {
   if (!config) throw new Error('Not configured');
 
   let url = 'https://api.openai.com/v1/chat/completions';
@@ -301,19 +403,11 @@ async function callOpenAI(prompt: string): Promise<string> {
 
   const body = {
     model: config.isAzure ? undefined : config.model || 'gpt-4.1-mini',
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a legal expert specializing in commercial contract analysis. Always respond with valid JSON only.',
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: 500,
-    response_format: config.isAzure ? undefined : { type: 'json_object' },
+    messages,
+    temperature: options.temperature,
+    max_tokens: options.maxTokens,
+    response_format:
+      config.isAzure || !options.expectJson ? undefined : { type: 'json_object' },
   };
 
   const response = await fetch(url, {
@@ -362,6 +456,37 @@ async function callRiskProxy(difference: Difference): Promise<Record<string, unk
   const data = await response.json();
   if (!data || typeof data !== 'object') {
     throw new Error('Risk proxy returned invalid response.');
+  }
+
+  return data as Record<string, unknown>;
+}
+
+async function callRiskFollowupProxy(
+  difference: Difference,
+  riskAnalysis: RiskAnalysis,
+  question: string
+): Promise<Record<string, unknown>> {
+  const url = getRiskFollowupProxyUrl();
+  if (!url) {
+    throw new Error('Risk follow-up proxy is not configured.');
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ difference, riskAnalysis, question }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Risk follow-up proxy error: ${error}`);
+  }
+
+  const data = await response.json();
+  if (!data || typeof data !== 'object') {
+    throw new Error('Risk follow-up proxy returned invalid response.');
   }
 
   return data as Record<string, unknown>;
@@ -734,6 +859,27 @@ function parseRiskResponse(raw: string): Record<string, unknown> {
   }
 }
 
+function parseFollowUpAnswer(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error('Empty follow-up response.');
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && 'answer' in parsed) {
+      const answer = (parsed as { answer?: unknown }).answer;
+      if (typeof answer === 'string' && answer.trim().length > 0) {
+        return answer.trim();
+      }
+    }
+  } catch {
+    // Plain text is expected in most cases.
+  }
+
+  return trimmed;
+}
+
 function getRiskProxyUrl(): string | null {
   const value = import.meta.env.VITE_RISK_API_URL;
   if (!value || typeof value !== 'string') {
@@ -745,6 +891,24 @@ function getRiskProxyUrl(): string | null {
 
 function hasRiskProxyConfigured(): boolean {
   return !!getRiskProxyUrl();
+}
+
+function getRiskFollowupProxyUrl(): string | null {
+  const explicit = import.meta.env.VITE_RISK_FOLLOWUP_API_URL;
+  if (explicit && typeof explicit === 'string' && explicit.trim().length > 0) {
+    return explicit.trim();
+  }
+
+  const riskUrl = getRiskProxyUrl();
+  if (!riskUrl) {
+    return null;
+  }
+
+  return riskUrl.replace(/\/analyze-risk\/?$/i, '/risk-followup');
+}
+
+function hasRiskFollowupProxyConfigured(): boolean {
+  return !!getRiskFollowupProxyUrl();
 }
 
 function getGroupingProxyUrl(): string | null {

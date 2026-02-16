@@ -3,6 +3,7 @@ import type { Comparison, Note } from '../types';
 const STORAGE_KEY = 'supplier-agreement-comparisons';
 const NOTES_KEY = 'supplier-agreement-notes';
 const API_CONFIG_KEY = 'supplier-agreement-api-config';
+const LEGACY_API_CONFIG_KEYS = ['supplier-agreement-config', 'openai-config'];
 
 export function saveComparison(comparison: Comparison): void {
   const comparisons = getComparisons();
@@ -114,14 +115,24 @@ export interface APIConfig {
 
 export function saveAPIConfig(config: APIConfig): void {
   // Note: In production, you'd want to encrypt this or use a more secure method
-  localStorage.setItem(API_CONFIG_KEY, JSON.stringify(config));
+  const serialized = JSON.stringify(config);
+  localStorage.setItem(API_CONFIG_KEY, serialized);
+  // Write-through to legacy key for backwards compatibility across older builds.
+  localStorage.setItem(LEGACY_API_CONFIG_KEYS[0], serialized);
 }
 
 export function getAPIConfig(): APIConfig | null {
   try {
-    const data = localStorage.getItem(API_CONFIG_KEY);
-    if (!data) return null;
-    return JSON.parse(data);
+    const candidates = [API_CONFIG_KEY, ...LEGACY_API_CONFIG_KEYS];
+    for (const key of candidates) {
+      const data = localStorage.getItem(key);
+      if (!data) continue;
+      const parsed = JSON.parse(data);
+      if (parsed && typeof parsed === 'object' && typeof parsed.apiKey === 'string') {
+        return parsed as APIConfig;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -129,6 +140,9 @@ export function getAPIConfig(): APIConfig | null {
 
 export function clearAPIConfig(): void {
   localStorage.removeItem(API_CONFIG_KEY);
+  for (const key of LEGACY_API_CONFIG_KEYS) {
+    localStorage.removeItem(key);
+  }
 }
 
 // Generate unique IDs
