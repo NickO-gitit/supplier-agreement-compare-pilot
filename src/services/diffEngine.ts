@@ -772,6 +772,23 @@ function splitModificationRun(deletedText: string, addedText: string): ChangePar
   const deletedParts = splitStructuredText(deletedText);
   const addedParts = splitStructuredText(addedText);
 
+  // If there is no plausible modification pairing between any deleted/added
+  // segment, keep both sides separate to avoid interleaving unrelated clauses.
+  if (!hasAnyModificationPairCandidate(deletedParts, addedParts)) {
+    return [
+      ...deletedParts.map((part) => ({
+        type: 'deletion' as const,
+        originalText: part,
+        proposedText: null,
+      })),
+      ...addedParts.map((part) => ({
+        type: 'addition' as const,
+        originalText: null,
+        proposedText: part,
+      })),
+    ];
+  }
+
   if (deletedParts.length === 1 && addedParts.length === 1) {
     if (!shouldPairAsModification(deletedText, addedText)) {
       return [
@@ -933,12 +950,13 @@ function splitStructuredText(text: string): string[] {
   }
 
   const normalizedSegments = mergeWhitespaceOnlySegments(segments);
+  const clauseMergedSegments = mergeHeadingOnlySegmentsWithFollowingBody(normalizedSegments);
 
-  if (!foundBoundary || normalizedSegments.length <= 1) {
+  if (!foundBoundary || clauseMergedSegments.length <= 1) {
     return [text];
   }
 
-  return normalizedSegments.filter((segment) => segment.length > 0);
+  return clauseMergedSegments.filter((segment) => segment.length > 0);
 }
 
 function mergeWhitespaceOnlySegments(segments: string[]): string[] {
@@ -968,6 +986,64 @@ function mergeWhitespaceOnlySegments(segments: string[]): string[] {
   }
 
   return merged;
+}
+
+function mergeHeadingOnlySegmentsWithFollowingBody(segments: string[]): string[] {
+  if (segments.length <= 1) {
+    return segments;
+  }
+
+  const merged: string[] = [];
+
+  for (let index = 0; index < segments.length; index++) {
+    const current = segments[index];
+    const next = segments[index + 1];
+
+    if (
+      next &&
+      isHeadingOnlySegment(current) &&
+      startsWithContinuationLine(next)
+    ) {
+      merged.push(`${current}${next}`);
+      index++;
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
+}
+
+function isHeadingOnlySegment(value: string): boolean {
+  const nonEmptyLines = value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (nonEmptyLines.length !== 1) {
+    return false;
+  }
+
+  const heading = nonEmptyLines[0];
+  return CLAUSE_START_REGEX.test(heading) && !startsWithMarker(heading);
+}
+
+function startsWithContinuationLine(value: string): boolean {
+  const firstNonEmptyLine = value
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  if (!firstNonEmptyLine) {
+    return false;
+  }
+
+  if (startsWithMarker(firstNonEmptyLine)) {
+    return false;
+  }
+
+  return !CLAUSE_START_REGEX.test(firstNonEmptyLine);
 }
 
 function getContextFromUnits(units: DiffUnit[], currentIndex: number): string {
@@ -1008,6 +1084,21 @@ function shouldPairAsModification(deletedPart: string, addedPart: string): boole
   }
 
   return textSimilarity(deletedPart, addedPart) >= 0.34;
+}
+
+function hasAnyModificationPairCandidate(
+  deletedParts: string[],
+  addedParts: string[]
+): boolean {
+  for (const deletedPart of deletedParts) {
+    for (const addedPart of addedParts) {
+      if (shouldPairAsModification(deletedPart, addedPart)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function coalesceAdjacentParts(parts: ChangePart[]): ChangePart[] {
