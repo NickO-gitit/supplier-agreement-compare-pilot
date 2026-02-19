@@ -12,6 +12,14 @@ param userIdentityId string
 param userIdentityClientId string
 param databaseConnectionString string = ''
 param foundryEndpoint string
+param azureOpenAiEndpoint string = ''
+@secure()
+param azureOpenAiKey string = ''
+param azureOpenAiDeployment string = ''
+param azureOpenAiApiVersion string = '2024-10-21'
+@secure()
+param openAiApiKey string = ''
+param openAiModel string = 'gpt-4.1-mini'
 param minReplicas int
 param maxReplicas int
 param containerCpu string
@@ -70,7 +78,49 @@ var foundryEnvVars = !empty(foundryEndpoint) ? [
   }
 ] : []
 
-var allEnvVars = concat(baseEnvVars, dbEnvVar, foundryEnvVars)
+var azureOpenAiEnvVars = concat(
+  !empty(azureOpenAiEndpoint) ? [
+    {
+      name: 'AZURE_OPENAI_ENDPOINT'
+      value: azureOpenAiEndpoint
+    }
+  ] : [],
+  !empty(azureOpenAiDeployment) ? [
+    {
+      name: 'AZURE_OPENAI_DEPLOYMENT'
+      value: azureOpenAiDeployment
+    }
+  ] : [],
+  !empty(azureOpenAiApiVersion) ? [
+    {
+      name: 'AZURE_OPENAI_API_VERSION'
+      value: azureOpenAiApiVersion
+    }
+  ] : [],
+  !empty(azureOpenAiKey) ? [
+    {
+      name: 'AZURE_OPENAI_KEY'
+      secretRef: 'azure-openai-key'
+    }
+  ] : []
+)
+
+var openAiEnvVars = concat(
+  !empty(openAiModel) ? [
+    {
+      name: 'OPENAI_MODEL'
+      value: openAiModel
+    }
+  ] : [],
+  !empty(openAiApiKey) ? [
+    {
+      name: 'OPENAI_API_KEY'
+      secretRef: 'openai-api-key'
+    }
+  ] : []
+)
+
+var allEnvVars = concat(baseEnvVars, dbEnvVar, foundryEnvVars, azureOpenAiEnvVars, openAiEnvVars)
 
 // ── Registry Config ───────────────────────────────────────────
 var managedIdentityRegistry = !empty(containerRegistryServer) ? [
@@ -81,6 +131,20 @@ var managedIdentityRegistry = !empty(containerRegistryServer) ? [
 ] : []
 
 var registries = managedIdentityRegistry
+var appSecrets = concat(
+  !empty(azureOpenAiKey) ? [
+    {
+      name: 'azure-openai-key'
+      value: azureOpenAiKey
+    }
+  ] : [],
+  !empty(openAiApiKey) ? [
+    {
+      name: 'openai-api-key'
+      value: openAiApiKey
+    }
+  ] : []
+)
 
 // ── Container App ─────────────────────────────────────────────
 resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
@@ -102,6 +166,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         allowInsecure: false
       }
       registries: registries
+      secrets: appSecrets
     }
     template: {
       containers: [

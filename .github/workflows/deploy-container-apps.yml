@@ -1,0 +1,132 @@
+name: Deploy to Azure Container Apps
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_sql:
+        description: "Deploy a new SQL database (true/false)"
+        required: false
+        default: "false"
+
+env:
+  IMAGE_NAME: ${{ github.event.repository.name }}
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+  ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+
+jobs:
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_sha: ${{ steps.image.outputs.image_sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Derive ACR Name
+        id: naming
+        shell: bash
+        run: |
+          SAFE_ENV=$(echo "${{ env.ENVIRONMENT_NAME }}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')
+          if [[ -z "$SAFE_ENV" ]]; then SAFE_ENV="app"; fi
+          ACR_NAME="${SAFE_ENV}acr"
+          ACR_NAME="${ACR_NAME:0:50}"
+          if [[ ${#ACR_NAME} -lt 5 ]]; then ACR_NAME="acr${GITHUB_RUN_ID}"; fi
+          echo "acr_name=$ACR_NAME" >> "$GITHUB_OUTPUT"
+          echo "acr_login_server=${ACR_NAME}.azurecr.io" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure ACR Exists
+        shell: bash
+        run: |
+          az acr show --name "${{ steps.naming.outputs.acr_name }}" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1 || \
+          az acr create \
+            --name "${{ steps.naming.outputs.acr_name }}" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --location "$AZURE_LOCATION" \
+            --sku Basic \
+            --admin-enabled false
+
+      - name: Login to ACR
+        run: az acr login --name "${{ steps.naming.outputs.acr_name }}"
+
+      - name: Set Image Tag
+        id: image
+        shell: bash
+        run: |
+          echo "image_sha=${{ steps.naming.outputs.acr_login_server }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.image_sha }}
+            ${{ steps.naming.outputs.acr_login_server }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep
+        id: deploy
+        uses: azure/arm-deploy@v2
+        with:
+          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
+          template: ./hexatronic/main.bicep
+          parameters: >
+            location="${{ env.AZURE_LOCATION }}"
+            environmentName="${{ env.ENVIRONMENT_NAME }}"
+            containerImage="${{ needs.build.outputs.image_sha }}"
+            deploySql=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_sql == 'true' }}
+            existingDatabaseConnectionString="${{ vars.DATABASE_CONNECTION_STRING }}"
+            foundryEndpoint="${{ vars.FOUNDRY_ENDPOINT }}"
+            azureOpenAiEndpoint="${{ vars.AZURE_OPENAI_ENDPOINT }}"
+            azureOpenAiKey="${{ secrets.AZURE_OPENAI_KEY }}"
+            azureOpenAiDeployment="${{ vars.AZURE_OPENAI_DEPLOYMENT }}"
+            azureOpenAiApiVersion="${{ vars.AZURE_OPENAI_API_VERSION }}"
+            openAiApiKey="${{ secrets.OPENAI_API_KEY }}"
+            openAiModel="${{ vars.OPENAI_MODEL }}"
+          failOnStdErr: false
+          deploymentName: deploy-${{ github.run_number }}-${{ github.sha }}
+
+      - name: Output URL
+        run: |
+          echo "Deployment complete"
+          echo "App URL: ${{ steps.deploy.outputs.containerAppUrl }}"

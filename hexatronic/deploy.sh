@@ -114,6 +114,12 @@ az deployment group create \
     sqlAdminPassword="${SQL_ADMIN_PASSWORD:-}" \
     sqlDatabaseName="${SQL_DATABASE_NAME:-appdb}" \
     foundryEndpoint="${FOUNDRY_ENDPOINT:-}" \
+    azureOpenAiEndpoint="${AZURE_OPENAI_ENDPOINT:-}" \
+    azureOpenAiKey="${AZURE_OPENAI_KEY:-}" \
+    azureOpenAiDeployment="${AZURE_OPENAI_DEPLOYMENT:-}" \
+    azureOpenAiApiVersion="${AZURE_OPENAI_API_VERSION:-2024-10-21}" \
+    openAiApiKey="${OPENAI_API_KEY:-}" \
+    openAiModel="${OPENAI_MODEL:-gpt-4.1-mini}" \
   --output table
 
 echo ""

@@ -40,6 +40,26 @@ param existingDatabaseConnectionString string = ''
 @description('Azure AI Foundry endpoint URL')
 param foundryEndpoint string = ''
 
+@description('Azure OpenAI endpoint URL (e.g. https://myresource.openai.azure.com)')
+param azureOpenAiEndpoint string = ''
+
+@secure()
+@description('Azure OpenAI API key')
+param azureOpenAiKey string = ''
+
+@description('Azure OpenAI deployment name')
+param azureOpenAiDeployment string = ''
+
+@description('Azure OpenAI API version')
+param azureOpenAiApiVersion string = '2024-10-21'
+
+@secure()
+@description('Optional direct OpenAI API key')
+param openAiApiKey string = ''
+
+@description('Optional direct OpenAI model name')
+param openAiModel string = 'gpt-4.1-mini'
+
 // ── Container App Config ─────────────────────────────────────
 @description('Minimum replicas for the container app')
 param minReplicas int = 0
@@ -124,7 +144,7 @@ module rolesModule 'roles.bicep' = if (deployRoles) {
   name: 'roles-deployment'
   params: {
     managedIdentityPrincipalId: userIdentity.properties.principalId
-    assignFoundryRole: !empty(foundryEndpoint)
+    assignFoundryRole: !empty(foundryEndpoint) || !empty(azureOpenAiEndpoint)
     assignAcrPull: true
     acrName: containerRegistry.name
   }
@@ -150,6 +170,12 @@ module containerAppModule 'containerapps.bicep' = {
     userIdentityClientId: userIdentity.properties.clientId
     databaseConnectionString: resolvedConnectionString
     foundryEndpoint: foundryEndpoint
+    azureOpenAiEndpoint: azureOpenAiEndpoint
+    azureOpenAiKey: azureOpenAiKey
+    azureOpenAiDeployment: azureOpenAiDeployment
+    azureOpenAiApiVersion: azureOpenAiApiVersion
+    openAiApiKey: openAiApiKey
+    openAiModel: openAiModel
     minReplicas: minReplicas
     maxReplicas: maxReplicas
     containerCpu: containerCpu

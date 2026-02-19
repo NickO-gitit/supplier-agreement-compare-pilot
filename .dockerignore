@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.github
+.vscode
+.claude
+npm-debug.log*
+*.tsbuildinfo
+infra
+hexatronic

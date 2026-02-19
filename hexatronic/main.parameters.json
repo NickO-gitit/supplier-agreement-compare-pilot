@@ -26,12 +26,6 @@
     "deploySql": {
       "value": false
     },
-    "deployCosmosDb": {
-      "value": false
-    },
-    "deployPostgresql": {
-      "value": false
-    },
     "deployRoles": {
       "value": true
     },
@@ -40,6 +34,18 @@
     },
     "foundryEndpoint": {
       "value": ""
+    },
+    "azureOpenAiEndpoint": {
+      "value": ""
+    },
+    "azureOpenAiDeployment": {
+      "value": ""
+    },
+    "azureOpenAiApiVersion": {
+      "value": "2024-10-21"
+    },
+    "openAiModel": {
+      "value": "gpt-4.1-mini"
     }
   }
 }

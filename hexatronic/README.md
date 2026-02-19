@@ -19,6 +19,32 @@ When workflow runs, it does this for you:
 
 No registry password, no Foundry API key, and no hardcoded secrets are required in code files.
 
+## This repo integration
+
+This repository now supports Azure Container Apps directly:
+
+- Docker runtime: `Dockerfile`
+- App server: `server/index.mjs`
+- Active CI/CD workflow: `.github/workflows/deploy-container-apps.yml`
+- Infra template: `hexatronic/main.bicep`
+
+Required GitHub settings:
+
+- Secrets:
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+  - `AZURE_OPENAI_KEY` (recommended)
+  - `OPENAI_API_KEY` (optional fallback)
+- Variables:
+  - `AZURE_RESOURCE_GROUP`
+  - `AZURE_LOCATION`
+  - `ENVIRONMENT_NAME`
+  - `AZURE_OPENAI_ENDPOINT`
+  - `AZURE_OPENAI_DEPLOYMENT`
+  - `AZURE_OPENAI_API_VERSION` (optional; default `2024-10-21`)
+  - `OPENAI_MODEL` (optional; default `gpt-4.1-mini`)
+
 ## Important safety rules
 
 - Do not commit `.env` files.
