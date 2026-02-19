@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "swedencentral"
+    },
+    "environmentName": {
+      "value": "myapp-prod"
+    },
+    "containerImage": {
+      "value": "placeholder.azurecr.io/app:latest"
+    },
+    "minReplicas": {
+      "value": 0
+    },
+    "maxReplicas": {
+      "value": 5
+    },
+    "containerCpu": {
+      "value": "0.5"
+    },
+    "containerMemory": {
+      "value": "1Gi"
+    },
+    "deploySql": {
+      "value": false
+    },
+    "deployCosmosDb": {
+      "value": false
+    },
+    "deployPostgresql": {
+      "value": false
+    },
+    "deployRoles": {
+      "value": true
+    },
+    "existingDatabaseConnectionString": {
+      "value": ""
+    },
+    "foundryEndpoint": {
+      "value": ""
+    }
+  }
+}

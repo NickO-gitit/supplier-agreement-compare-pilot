@@ -4,7 +4,9 @@ import type { Difference } from '../types';
 const dmp = new DiffMatchPatch();
 const CLAUSE_START_REGEX = /^\s*\d+(?:\.\d+)*\.?(?:\s|$)/;
 const INLINE_CLAUSE_BOUNDARY_REGEX = /(?<=[\].;:!?])\s+(?=\d+(?:\.\d+)+\.?\s)/g;
-const INLINE_MARKER_BOUNDARY_REGEX = /\s+(?=\[(?:ADD|REP|DEL|REMOVE|INSERT|CHANGE)\s*:)/gi;
+const INLINE_NUMBERED_HEADING_BOUNDARY_REGEX = /\s+(?=\d+\.\s+[A-Z(“"])/g;
+const INLINE_NUMBERED_SUBCLAUSE_BOUNDARY_REGEX = /\s+(?=\d+\.\d+(?:\.\d+)*\.?\s+[A-Z(“"])/g;
+const INLINE_MARKER_BOUNDARY_REGEX = /\s+(?=\[[A-Za-z][A-Za-z0-9 _-]{0,24}\s*:)/g;
 const INLINE_BULLET_BOUNDARY_REGEX = /(?<=[.;!?])\s+(?=-\s+[A-Za-z\[])/g;
 
 export type DiffMode = 'character' | 'word' | 'sentence' | 'paragraph';
@@ -74,6 +76,8 @@ function normalizeText(text: string): string {
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .replace(INLINE_CLAUSE_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_NUMBERED_HEADING_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_NUMBERED_SUBCLAUSE_BOUNDARY_REGEX, '\n')
     .replace(INLINE_MARKER_BOUNDARY_REGEX, '\n')
     .replace(INLINE_BULLET_BOUNDARY_REGEX, '\n')
     .trim();
@@ -814,82 +818,49 @@ function splitModificationRun(deletedText: string, addedText: string): ChangePar
     ];
   }
 
+  const matches = buildPartPairMatches(deletedParts, addedParts);
   const parts: ChangePart[] = [];
-  let deletedIndex = 0;
-  let addedIndex = 0;
+  let deletedCursor = 0;
+  let addedCursor = 0;
 
-  while (deletedIndex < deletedParts.length || addedIndex < addedParts.length) {
-    const deletedPart = deletedParts[deletedIndex] || null;
-    const addedPart = addedParts[addedIndex] || null;
+  for (const [matchedDeletedIndex, matchedAddedIndex] of matches) {
+    appendOrderedGapParts(
+      parts,
+      deletedParts,
+      addedParts,
+      deletedCursor,
+      matchedDeletedIndex,
+      addedCursor,
+      matchedAddedIndex
+    );
+    deletedCursor = matchedDeletedIndex;
+    addedCursor = matchedAddedIndex;
 
-    if (deletedPart && addedPart) {
-      if (shouldPairAsModification(deletedPart, addedPart)) {
-        parts.push({
-          type: 'modification',
-          originalText: deletedPart,
-          proposedText: addedPart,
-        });
-        deletedIndex++;
-        addedIndex++;
-        continue;
-      }
+    parts.push({
+      type: 'modification',
+      originalText: deletedParts[matchedDeletedIndex],
+      proposedText: addedParts[matchedAddedIndex],
+    });
+    deletedCursor = matchedDeletedIndex + 1;
+    addedCursor = matchedAddedIndex + 1;
+  }
 
-      const nextDeletedPart = deletedParts[deletedIndex + 1] || null;
-      const nextAddedPart = addedParts[addedIndex + 1] || null;
+  while (deletedCursor < deletedParts.length) {
+    parts.push({
+      type: 'deletion',
+      originalText: deletedParts[deletedCursor],
+      proposedText: null,
+    });
+    deletedCursor++;
+  }
 
-      if (nextDeletedPart && shouldPairAsModification(nextDeletedPart, addedPart)) {
-        parts.push({
-          type: 'deletion',
-          originalText: deletedPart,
-          proposedText: null,
-        });
-        deletedIndex++;
-        continue;
-      }
-
-      if (nextAddedPart && shouldPairAsModification(deletedPart, nextAddedPart)) {
-        parts.push({
-          type: 'addition',
-          originalText: null,
-          proposedText: addedPart,
-        });
-        addedIndex++;
-        continue;
-      }
-
-      parts.push({
-        type: 'deletion',
-        originalText: deletedPart,
-        proposedText: null,
-      });
-      parts.push({
-        type: 'addition',
-        originalText: null,
-        proposedText: addedPart,
-      });
-      deletedIndex++;
-      addedIndex++;
-      continue;
-    }
-
-    if (deletedPart) {
-      parts.push({
-        type: 'deletion',
-        originalText: deletedPart,
-        proposedText: null,
-      });
-      deletedIndex++;
-      continue;
-    }
-
-    if (addedPart) {
-      parts.push({
-        type: 'addition',
-        originalText: null,
-        proposedText: addedPart,
-      });
-      addedIndex++;
-    }
+  while (addedCursor < addedParts.length) {
+    parts.push({
+      type: 'addition',
+      originalText: null,
+      proposedText: addedParts[addedCursor],
+    });
+    addedCursor++;
   }
 
   const compactedParts = coalesceAdjacentParts(parts);
@@ -905,6 +876,165 @@ function splitModificationRun(deletedText: string, addedText: string): ChangePar
       ];
 }
 
+function appendOrderedGapParts(
+  parts: ChangePart[],
+  deletedParts: string[],
+  addedParts: string[],
+  deletedStart: number,
+  deletedEnd: number,
+  addedStart: number,
+  addedEnd: number
+): void {
+  let deletedIndex = deletedStart;
+  let addedIndex = addedStart;
+
+  while (deletedIndex < deletedEnd && addedIndex < addedEnd) {
+    const deletedPart = deletedParts[deletedIndex];
+    const addedPart = addedParts[addedIndex];
+
+    if (shouldEmitAdditionBeforeDeletion(addedPart, deletedPart)) {
+      parts.push({
+        type: 'addition',
+        originalText: null,
+        proposedText: addedPart,
+      });
+      addedIndex++;
+      continue;
+    }
+
+    parts.push({
+      type: 'deletion',
+      originalText: deletedPart,
+      proposedText: null,
+    });
+    deletedIndex++;
+  }
+
+  while (deletedIndex < deletedEnd) {
+    parts.push({
+      type: 'deletion',
+      originalText: deletedParts[deletedIndex],
+      proposedText: null,
+    });
+    deletedIndex++;
+  }
+
+  while (addedIndex < addedEnd) {
+    parts.push({
+      type: 'addition',
+      originalText: null,
+      proposedText: addedParts[addedIndex],
+    });
+    addedIndex++;
+  }
+}
+
+function buildPartPairMatches(
+  deletedParts: string[],
+  addedParts: string[]
+): Array<[number, number]> {
+  const rows = deletedParts.length;
+  const cols = addedParts.length;
+  const dp: number[][] = Array.from({ length: rows + 1 }, () =>
+    Array.from({ length: cols + 1 }, () => 0)
+  );
+
+  for (let i = rows - 1; i >= 0; i--) {
+    for (let j = cols - 1; j >= 0; j--) {
+      const skipDeletedScore = dp[i + 1][j];
+      const skipAddedScore = dp[i][j + 1];
+      let bestScore = Math.max(skipDeletedScore, skipAddedScore);
+
+      if (shouldPairAsModification(deletedParts[i], addedParts[j])) {
+        const pairScore =
+          getModificationPairScore(deletedParts[i], addedParts[j]) + dp[i + 1][j + 1];
+        if (pairScore > bestScore) {
+          bestScore = pairScore;
+        }
+      }
+
+      dp[i][j] = bestScore;
+    }
+  }
+
+  const matches: Array<[number, number]> = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < rows && j < cols) {
+    if (shouldPairAsModification(deletedParts[i], addedParts[j])) {
+      const pairScore =
+        getModificationPairScore(deletedParts[i], addedParts[j]) + dp[i + 1][j + 1];
+      const skipDeletedScore = dp[i + 1][j];
+      const skipAddedScore = dp[i][j + 1];
+
+      if (pairScore >= skipDeletedScore && pairScore >= skipAddedScore) {
+        matches.push([i, j]);
+        i++;
+        j++;
+        continue;
+      }
+    }
+
+    if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+
+  return matches;
+}
+
+function shouldEmitAdditionBeforeDeletion(addedPart: string, deletedPart: string): boolean {
+  const addedClause = extractLeadingClauseId(addedPart);
+  const deletedClause = extractLeadingClauseId(deletedPart);
+
+  if (!addedClause || !deletedClause) {
+    return false;
+  }
+
+  return compareClauseIds(addedClause, deletedClause) < 0;
+}
+
+function compareClauseIds(left: string, right: string): number {
+  const leftParts = left.split('.').filter(Boolean).map((part) => Number(part));
+  const rightParts = right.split('.').filter(Boolean).map((part) => Number(part));
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index++) {
+    const leftValue = leftParts[index] ?? -1;
+    const rightValue = rightParts[index] ?? -1;
+    if (leftValue < rightValue) {
+      return -1;
+    }
+    if (leftValue > rightValue) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+function getModificationPairScore(deletedPart: string, addedPart: string): number {
+  const deletedNormalized = normalizeForMeaningfulComparison(deletedPart);
+  const addedNormalized = normalizeForMeaningfulComparison(addedPart);
+
+  if (deletedNormalized.length > 0 && deletedNormalized === addedNormalized) {
+    return 1000;
+  }
+
+  const deletedClause = extractLeadingClauseId(deletedPart);
+  const addedClause = extractLeadingClauseId(addedPart);
+  const similarityScore = Math.round(textSimilarity(deletedPart, addedPart) * 100);
+
+  if (deletedClause && addedClause && deletedClause === addedClause) {
+    return 700 + similarityScore;
+  }
+
+  return similarityScore;
+}
+
 function splitStructuredText(text: string): string[] {
   if (!text) {
     return [];
@@ -912,6 +1042,8 @@ function splitStructuredText(text: string): string[] {
 
   const lines = text
     .replace(INLINE_CLAUSE_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_NUMBERED_HEADING_BOUNDARY_REGEX, '\n')
+    .replace(INLINE_NUMBERED_SUBCLAUSE_BOUNDARY_REGEX, '\n')
     .replace(INLINE_MARKER_BOUNDARY_REGEX, '\n')
     .replace(INLINE_BULLET_BOUNDARY_REGEX, '\n')
     .match(/[^\n]*\n|[^\n]+$/g);
@@ -950,13 +1082,15 @@ function splitStructuredText(text: string): string[] {
   }
 
   const normalizedSegments = mergeWhitespaceOnlySegments(segments);
-  const clauseMergedSegments = mergeHeadingOnlySegmentsWithFollowingBody(normalizedSegments);
+  const markerMergedSegments = mergeMarkerFragmentsWithFollowingContent(normalizedSegments);
+  const clauseMergedSegments = mergeHeadingOnlySegmentsWithFollowingBody(markerMergedSegments);
+  const labelValueMergedSegments = mergeLabelValueSegments(clauseMergedSegments);
 
-  if (!foundBoundary || clauseMergedSegments.length <= 1) {
+  if (!foundBoundary || labelValueMergedSegments.length <= 1) {
     return [text];
   }
 
-  return clauseMergedSegments.filter((segment) => segment.length > 0);
+  return labelValueMergedSegments.filter((segment) => segment.length > 0);
 }
 
 function mergeWhitespaceOnlySegments(segments: string[]): string[] {
@@ -988,6 +1122,43 @@ function mergeWhitespaceOnlySegments(segments: string[]): string[] {
   return merged;
 }
 
+function mergeMarkerFragmentsWithFollowingContent(segments: string[]): string[] {
+  if (segments.length <= 1) {
+    return segments;
+  }
+
+  const merged: string[] = [];
+
+  for (let index = 0; index < segments.length; index++) {
+    const current = segments[index];
+    const next = segments[index + 1];
+
+    if (next && isMarkerFragmentSegment(current)) {
+      merged.push(`${current}${next}`);
+      index++;
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
+}
+
+function isMarkerFragmentSegment(value: string): boolean {
+  const firstNonEmptyLine = value
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  if (!firstNonEmptyLine || !startsWithMarker(firstNonEmptyLine)) {
+    return false;
+  }
+
+  // Marker fragments like "[ADD:" should stay attached to their payload.
+  return !/\]/.test(value);
+}
+
 function mergeHeadingOnlySegmentsWithFollowingBody(segments: string[]): string[] {
   if (segments.length <= 1) {
     return segments;
@@ -1015,6 +1186,29 @@ function mergeHeadingOnlySegmentsWithFollowingBody(segments: string[]): string[]
   return merged;
 }
 
+function mergeLabelValueSegments(segments: string[]): string[] {
+  if (segments.length <= 1) {
+    return segments;
+  }
+
+  const merged: string[] = [];
+
+  for (let index = 0; index < segments.length; index++) {
+    const current = segments[index];
+    const next = segments[index + 1];
+
+    if (next && isLabelOnlySegment(current) && startsWithValueLine(next)) {
+      merged.push(`${current}${next}`);
+      index++;
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
+}
+
 function isHeadingOnlySegment(value: string): boolean {
   const nonEmptyLines = value
     .split('\n')
@@ -1027,6 +1221,38 @@ function isHeadingOnlySegment(value: string): boolean {
 
   const heading = nonEmptyLines[0];
   return CLAUSE_START_REGEX.test(heading) && !startsWithMarker(heading);
+}
+
+function isLabelOnlySegment(value: string): boolean {
+  const nonEmptyLines = value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (nonEmptyLines.length !== 1) {
+    return false;
+  }
+
+  const label = nonEmptyLines[0];
+  if (startsWithMarker(label) || CLAUSE_START_REGEX.test(label)) {
+    return false;
+  }
+
+  return /^[A-Za-z][^:\n]{0,80}:$/.test(label);
+}
+
+function startsWithValueLine(value: string): boolean {
+  const firstNonEmptyLine = value
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  if (!firstNonEmptyLine) {
+    return false;
+  }
+
+  // Values commonly found after labels (e.g., "Version:" + "1.0").
+  return /^[\[\(]?[A-Za-z0-9]+(?:[.\- ][A-Za-z0-9]+){0,6}[\]\)]?$/.test(firstNonEmptyLine);
 }
 
 function startsWithContinuationLine(value: string): boolean {
@@ -1151,11 +1377,11 @@ function canMergeParts(previous: ChangePart, current: ChangePart): boolean {
 }
 
 function startsWithMarker(value: string): boolean {
-  return /^\s*\[(ADD|REP|DEL|REMOVE|INSERT|CHANGE)\b/i.test(value);
+  return /^\s*\[[A-Za-z][A-Za-z0-9 _-]{0,24}\s*:/.test(value);
 }
 
 function containsMarkerDirective(value: string): boolean {
-  return /\[(ADD|REP|DEL|REMOVE|INSERT|CHANGE)\s*:/i.test(value);
+  return /\[[A-Za-z][A-Za-z0-9 _-]{0,24}\s*:/.test(value);
 }
 
 function concatNullable(left: string | null, right: string | null): string | null {

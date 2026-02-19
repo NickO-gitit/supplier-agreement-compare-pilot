@@ -1,0 +1,165 @@
+// ============================================================
+// main.bicep - Orchestrator for all infrastructure modules
+// ============================================================
+
+targetScope = 'resourceGroup'
+
+// ── Core Parameters ──────────────────────────────────────────
+@description('Azure region for all resources')
+param location string = 'swedencentral'
+
+@description('Environment name prefix (dev, staging, prod)')
+param environmentName string
+
+@description('Container image to deploy (e.g. ghcr.io/org/repo:sha)')
+param containerImage string
+
+// ── Feature Flags ─────────────────────────────────────────────
+@description('Deploy a new SQL database if none is found')
+param deploySql bool = false
+
+@description('Assign RBAC roles for managed identity')
+param deployRoles bool = true
+
+// ── Database Config (used only when deploying new DB) ────────
+@description('SQL Admin username (required if deploySql=true)')
+param sqlAdminLogin string = ''
+
+@secure()
+@description('SQL Admin password (required if deploySql=true)')
+param sqlAdminPassword string = ''
+
+@description('SQL Database name')
+param sqlDatabaseName string = 'appdb'
+
+// ── Existing Database Connection ─────────────────────────────
+@description('Connection string if you already have a database (overrides SQL deployment)')
+param existingDatabaseConnectionString string = ''
+
+// ── Microsoft Foundry / AI ───────────────────────────────────
+@description('Azure AI Foundry endpoint URL')
+param foundryEndpoint string = ''
+
+// ── Container App Config ─────────────────────────────────────
+@description('Minimum replicas for the container app')
+param minReplicas int = 0
+
+@description('Maximum replicas for the container app')
+@allowed([
+  1
+  2
+  3
+  5
+])
+param maxReplicas int = 5
+
+@description('Container CPU cores')
+@allowed([
+  '0.25'
+  '0.5'
+  '0.75'
+  '1.0'
+  '1.25'
+  '1.5'
+  '1.75'
+  '2.0'
+])
+param containerCpu string = '0.5'
+
+@description('Container memory in GB')
+@allowed([
+  '0.5Gi'
+  '1Gi'
+  '1.5Gi'
+  '2Gi'
+  '3Gi'
+  '4Gi'
+])
+param containerMemory string = '1Gi'
+
+// ── Computed Names ────────────────────────────────────────────
+var prefix = environmentName
+var containerAppEnvName = '${prefix}-cae'
+var containerAppName = '${prefix}-app'
+var logAnalyticsName = '${prefix}-logs'
+var sqlServerName = '${prefix}-sql'
+var userIdentityName = '${prefix}-id'
+var acrNameBase = replace(toLower('${prefix}acr'), '-', '')
+var acrName = length(acrNameBase) < 5 ? 'acr${take(uniqueString(resourceGroup().id), 8)}' : take(acrNameBase, 50)
+
+// ── Azure Container Registry ────────────────────────────────
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
+  name: acrName
+  location: location
+  sku: {
+    name: 'Basic'
+  }
+  properties: {
+    adminUserEnabled: false
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// ── Managed Identity ─────────────────────────────────────────
+resource userIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: userIdentityName
+  location: location
+}
+
+// ── SQL Module ───────────────────────────────────────────────
+module sqlModule 'sql.bicep' = if (deploySql && empty(existingDatabaseConnectionString)) {
+  name: 'sql-deployment'
+  params: {
+    location: location
+    sqlServerName: sqlServerName
+    sqlDatabaseName: sqlDatabaseName
+    sqlAdminLogin: sqlAdminLogin
+    sqlAdminPassword: sqlAdminPassword
+    managedIdentityPrincipalId: userIdentity.properties.principalId
+  }
+}
+
+// ── Roles Module ─────────────────────────────────────────────
+module rolesModule 'roles.bicep' = if (deployRoles) {
+  name: 'roles-deployment'
+  params: {
+    managedIdentityPrincipalId: userIdentity.properties.principalId
+    assignFoundryRole: !empty(foundryEndpoint)
+    assignAcrPull: true
+    acrName: containerRegistry.name
+  }
+}
+
+// ── Resolve Connection String ─────────────────────────────────
+// Priority: existingDatabaseConnectionString > newly deployed SQL
+var resolvedConnectionString = !empty(existingDatabaseConnectionString)
+  ? existingDatabaseConnectionString
+  : (deploySql ? sqlModule!.outputs.connectionString : '')
+
+// ── Container Apps Module ─────────────────────────────────────
+module containerAppModule 'containerapps.bicep' = {
+  name: 'containerapp-deployment'
+  params: {
+    location: location
+    containerAppEnvName: containerAppEnvName
+    containerAppName: containerAppName
+    logAnalyticsName: logAnalyticsName
+    containerImage: containerImage
+    containerRegistryServer: containerRegistry.properties.loginServer
+    userIdentityId: userIdentity.id
+    userIdentityClientId: userIdentity.properties.clientId
+    databaseConnectionString: resolvedConnectionString
+    foundryEndpoint: foundryEndpoint
+    minReplicas: minReplicas
+    maxReplicas: maxReplicas
+    containerCpu: containerCpu
+    containerMemory: containerMemory
+    environmentName: environmentName
+  }
+}
+
+// ── Outputs ───────────────────────────────────────────────────
+output containerAppUrl string = containerAppModule.outputs.containerAppUrl
+output containerAppName string = containerAppName
+output managedIdentityClientId string = userIdentity.properties.clientId
+output managedIdentityPrincipalId string = userIdentity.properties.principalId

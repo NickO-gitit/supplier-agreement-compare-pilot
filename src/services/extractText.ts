@@ -1,10 +1,11 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
 import Tesseract from 'tesseract.js';
 
 // Set up PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export type SupportedFileType = 'pdf' | 'docx' | 'xlsx' | 'txt' | 'jpg' | 'jpeg' | 'png';
 
@@ -60,8 +61,18 @@ async function extractFromPDF(
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
     const pageText = textContent.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .join(' ');
+      .map((item) => {
+        if (!('str' in item)) {
+          return '';
+        }
+        const suffix = 'hasEOL' in item && item.hasEOL ? '\n' : '';
+        return `${item.str}${suffix}`;
+      })
+      .join(' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
     textParts.push(pageText);
 
     if (onProgress) {
