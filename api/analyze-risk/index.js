@@ -19,16 +19,17 @@ Respond in this exact JSON format:
 
 module.exports = async function (context, req) {
   try {
-    const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
-    const apiKey = process.env.AZURE_OPENAI_KEY;
-    const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
-    const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2024-10-21";
+    const endpoint = resolveEndpoint();
+    const apiKey = process.env.FOUNDRY_API_KEY || process.env.AZURE_OPENAI_KEY;
+    const deployment = process.env.FOUNDRY_DEPLOYMENT || process.env.AZURE_OPENAI_DEPLOYMENT;
+    const apiVersion =
+      process.env.FOUNDRY_API_VERSION || process.env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 
     if (!endpoint || !apiKey || !deployment) {
       context.res = {
         status: 500,
         headers: { "Content-Type": "application/json" },
-        body: { error: "Azure OpenAI settings are not configured on the server." }
+        body: { error: "Foundry/OpenAI settings are not configured on the server." }
       };
       return;
     }
@@ -81,7 +82,7 @@ module.exports = async function (context, req) {
       context.res = {
         status: 502,
         headers: { "Content-Type": "application/json" },
-        body: { error: `Azure OpenAI error: ${text}` }
+        body: { error: `Foundry/OpenAI error: ${text}` }
       };
       return;
     }
@@ -149,4 +150,24 @@ function normalizeRiskLevel(value) {
 
 function stringOrFallback(value, fallback) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function resolveEndpoint() {
+  const raw =
+    process.env.FOUNDRY_PROJECT_ENDPOINT ||
+    process.env.AZURE_FOUNDRY_ENDPOINT ||
+    process.env.AZURE_OPENAI_ENDPOINT ||
+    "";
+  return normalizeEndpoint(raw);
+}
+
+function normalizeEndpoint(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) return "";
+
+  const withoutQuery = trimmed.split("?")[0];
+  const marker = "/openai/deployments/";
+  const markerIndex = withoutQuery.toLowerCase().indexOf(marker);
+  const root = markerIndex >= 0 ? withoutQuery.slice(0, markerIndex) : withoutQuery;
+  return root.replace(/\/+$/, "");
 }

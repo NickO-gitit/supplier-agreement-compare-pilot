@@ -114,6 +114,10 @@ az deployment group create \
     sqlAdminPassword="${SQL_ADMIN_PASSWORD:-}" \
     sqlDatabaseName="${SQL_DATABASE_NAME:-appdb}" \
     foundryEndpoint="${FOUNDRY_ENDPOINT:-}" \
+    foundryProjectEndpoint="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+    foundryApiKey="${FOUNDRY_API_KEY:-}" \
+    foundryDeployment="${FOUNDRY_DEPLOYMENT:-}" \
+    foundryApiVersion="${FOUNDRY_API_VERSION:-2024-10-21}" \
     azureOpenAiEndpoint="${AZURE_OPENAI_ENDPOINT:-}" \
     azureOpenAiKey="${AZURE_OPENAI_KEY:-}" \
     azureOpenAiDeployment="${AZURE_OPENAI_DEPLOYMENT:-}" \

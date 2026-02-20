@@ -34,15 +34,15 @@ Required GitHub settings:
   - `AZURE_CLIENT_ID`
   - `AZURE_TENANT_ID`
   - `AZURE_SUBSCRIPTION_ID`
-  - `AZURE_OPENAI_KEY` (recommended)
+  - `FOUNDRY_API_KEY` (recommended)
   - `OPENAI_API_KEY` (optional fallback)
 - Variables:
   - `AZURE_RESOURCE_GROUP`
   - `AZURE_LOCATION`
   - `ENVIRONMENT_NAME`
-  - `AZURE_OPENAI_ENDPOINT`
-  - `AZURE_OPENAI_DEPLOYMENT`
-  - `AZURE_OPENAI_API_VERSION` (optional; default `2024-10-21`)
+  - `FOUNDRY_PROJECT_ENDPOINT`
+  - `FOUNDRY_DEPLOYMENT`
+  - `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
   - `OPENAI_MODEL` (optional; default `gpt-4.1-mini`)
 
 ## Important safety rules
@@ -98,8 +98,11 @@ In your GitHub repo:
 Add:
 
 - `AZURE_RESOURCE_GROUP` (example: `rg-myapp-prod`)
+- `AZURE_LOCATION` (example: `swedencentral`)
 - `ENVIRONMENT_NAME` (example: `myapp-prod`)
-- `FOUNDRY_ENDPOINT` (optional, only if your app needs it)
+- `FOUNDRY_PROJECT_ENDPOINT` (example: `https://<resource>.services.ai.azure.com/api/projects/<project>`)
+- `FOUNDRY_DEPLOYMENT` (example: `gpt-4.1-mini`)
+- `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
 
 You do NOT need to add ACR variable.
 ACR name is generated automatically from `ENVIRONMENT_NAME`.

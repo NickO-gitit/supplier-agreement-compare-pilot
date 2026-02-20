@@ -35,6 +35,15 @@
     "foundryEndpoint": {
       "value": ""
     },
+    "foundryProjectEndpoint": {
+      "value": ""
+    },
+    "foundryDeployment": {
+      "value": ""
+    },
+    "foundryApiVersion": {
+      "value": "2024-10-21"
+    },
     "azureOpenAiEndpoint": {
       "value": ""
     },

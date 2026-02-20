@@ -117,10 +117,10 @@ jobs:
             deploySql=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_sql == 'true' }}
             existingDatabaseConnectionString="${{ vars.DATABASE_CONNECTION_STRING }}"
             foundryEndpoint="${{ vars.FOUNDRY_ENDPOINT }}"
-            azureOpenAiEndpoint="${{ vars.AZURE_OPENAI_ENDPOINT }}"
-            azureOpenAiKey="${{ secrets.AZURE_OPENAI_KEY }}"
-            azureOpenAiDeployment="${{ vars.AZURE_OPENAI_DEPLOYMENT }}"
-            azureOpenAiApiVersion="${{ vars.AZURE_OPENAI_API_VERSION }}"
+            foundryProjectEndpoint="${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
+            foundryApiKey="${{ secrets.FOUNDRY_API_KEY }}"
+            foundryDeployment="${{ vars.FOUNDRY_DEPLOYMENT }}"
+            foundryApiVersion="${{ vars.FOUNDRY_API_VERSION }}"
             openAiApiKey="${{ secrets.OPENAI_API_KEY }}"
             openAiModel="${{ vars.OPENAI_MODEL }}"
           failOnStdErr: false

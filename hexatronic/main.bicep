@@ -40,6 +40,19 @@ param existingDatabaseConnectionString string = ''
 @description('Azure AI Foundry endpoint URL')
 param foundryEndpoint string = ''
 
+@description('Azure AI Foundry project endpoint URL')
+param foundryProjectEndpoint string = ''
+
+@secure()
+@description('Azure AI Foundry API key')
+param foundryApiKey string = ''
+
+@description('Azure AI Foundry model deployment name')
+param foundryDeployment string = ''
+
+@description('Azure AI Foundry API version')
+param foundryApiVersion string = '2024-10-21'
+
 @description('Azure OpenAI endpoint URL (e.g. https://myresource.openai.azure.com)')
 param azureOpenAiEndpoint string = ''
 
@@ -144,7 +157,7 @@ module rolesModule 'roles.bicep' = if (deployRoles) {
   name: 'roles-deployment'
   params: {
     managedIdentityPrincipalId: userIdentity.properties.principalId
-    assignFoundryRole: !empty(foundryEndpoint) || !empty(azureOpenAiEndpoint)
+    assignFoundryRole: !empty(foundryEndpoint) || !empty(foundryProjectEndpoint) || !empty(azureOpenAiEndpoint)
     assignAcrPull: true
     acrName: containerRegistry.name
   }
@@ -170,6 +183,10 @@ module containerAppModule 'containerapps.bicep' = {
     userIdentityClientId: userIdentity.properties.clientId
     databaseConnectionString: resolvedConnectionString
     foundryEndpoint: foundryEndpoint
+    foundryProjectEndpoint: foundryProjectEndpoint
+    foundryApiKey: foundryApiKey
+    foundryDeployment: foundryDeployment
+    foundryApiVersion: foundryApiVersion
     azureOpenAiEndpoint: azureOpenAiEndpoint
     azureOpenAiKey: azureOpenAiKey
     azureOpenAiDeployment: azureOpenAiDeployment

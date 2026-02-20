@@ -12,6 +12,11 @@ param userIdentityId string
 param userIdentityClientId string
 param databaseConnectionString string = ''
 param foundryEndpoint string
+param foundryProjectEndpoint string = ''
+@secure()
+param foundryApiKey string = ''
+param foundryDeployment string = ''
+param foundryApiVersion string = '2024-10-21'
 param azureOpenAiEndpoint string = ''
 @secure()
 param azureOpenAiKey string = ''
@@ -78,6 +83,33 @@ var foundryEnvVars = !empty(foundryEndpoint) ? [
   }
 ] : []
 
+var foundryProjectEnvVars = concat(
+  !empty(foundryProjectEndpoint) ? [
+    {
+      name: 'FOUNDRY_PROJECT_ENDPOINT'
+      value: foundryProjectEndpoint
+    }
+  ] : [],
+  !empty(foundryDeployment) ? [
+    {
+      name: 'FOUNDRY_DEPLOYMENT'
+      value: foundryDeployment
+    }
+  ] : [],
+  !empty(foundryApiVersion) ? [
+    {
+      name: 'FOUNDRY_API_VERSION'
+      value: foundryApiVersion
+    }
+  ] : [],
+  !empty(foundryApiKey) ? [
+    {
+      name: 'FOUNDRY_API_KEY'
+      secretRef: 'foundry-api-key'
+    }
+  ] : []
+)
+
 var azureOpenAiEnvVars = concat(
   !empty(azureOpenAiEndpoint) ? [
     {
@@ -120,7 +152,14 @@ var openAiEnvVars = concat(
   ] : []
 )
 
-var allEnvVars = concat(baseEnvVars, dbEnvVar, foundryEnvVars, azureOpenAiEnvVars, openAiEnvVars)
+var allEnvVars = concat(
+  baseEnvVars,
+  dbEnvVar,
+  foundryEnvVars,
+  foundryProjectEnvVars,
+  azureOpenAiEnvVars,
+  openAiEnvVars
+)
 
 // ── Registry Config ───────────────────────────────────────────
 var managedIdentityRegistry = !empty(containerRegistryServer) ? [
@@ -132,6 +171,12 @@ var managedIdentityRegistry = !empty(containerRegistryServer) ? [
 
 var registries = managedIdentityRegistry
 var appSecrets = concat(
+  !empty(foundryApiKey) ? [
+    {
+      name: 'foundry-api-key'
+      value: foundryApiKey
+    }
+  ] : [],
   !empty(azureOpenAiKey) ? [
     {
       name: 'azure-openai-key'
