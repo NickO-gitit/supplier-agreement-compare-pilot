@@ -1,3 +1,5 @@
+const { postChatCompletionWithVersionFallback } = require("../shared/foundryClient");
+
 const RISK_FOLLOWUP_PROMPT = `You are a legal contract assistant.
 You are answering a follow-up question about ONE specific contract change and its prior risk analysis.
 
@@ -83,16 +85,12 @@ module.exports = async function (context, req) {
       .replace("{recommendation}", riskAnalysis.recommendation || "Not available")
       .replace("{question}", question);
 
-    const url =
-      `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": apiKey
-      },
-      body: JSON.stringify({
+    const data = await postChatCompletionWithVersionFallback({
+      endpoint,
+      deployment,
+      apiKey,
+      apiVersion,
+      payload: {
         messages: [
           {
             role: "system",
@@ -105,20 +103,8 @@ module.exports = async function (context, req) {
         ],
         temperature: 0.2,
         max_tokens: 700
-      })
+      }
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      context.res = {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-        body: { error: `Foundry/OpenAI error: ${text}` }
-      };
-      return;
-    }
-
-    const data = await response.json();
     const answer = data && data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content
       : "";

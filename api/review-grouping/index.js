@@ -1,3 +1,5 @@
+const { postChatCompletionWithVersionFallback } = require("../shared/foundryClient");
+
 const GROUPING_REVIEW_PROMPT = `You are a contract diff quality reviewer.
 Your task is to judge whether ONE detected change appears grouped correctly in legal-document context.
 
@@ -72,16 +74,12 @@ module.exports = async function (context, req) {
       .replace("{originalContext}", originalContext || "[Not available]")
       .replace("{proposedContext}", proposedContext || "[Not available]");
 
-    const url =
-      `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": apiKey
-      },
-      body: JSON.stringify({
+    const data = await postChatCompletionWithVersionFallback({
+      endpoint,
+      deployment,
+      apiKey,
+      apiVersion,
+      payload: {
         messages: [
           {
             role: "system",
@@ -94,20 +92,8 @@ module.exports = async function (context, req) {
         ],
         temperature: 0.2,
         max_tokens: 500
-      })
+      }
     });
-
-    if (!response.ok) {
-      const text = await response.text();
-      context.res = {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-        body: { error: `Foundry/OpenAI error: ${text}` }
-      };
-      return;
-    }
-
-    const data = await response.json();
     const rawContent = data && data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content
       : "";
