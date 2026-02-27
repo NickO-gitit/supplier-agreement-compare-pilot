@@ -80,6 +80,9 @@ function App() {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [apiConfig, setApiConfig] = useState<APIConfig | null>(null);
 
+  const toPersistentRiskAnalyses = (items: RiskAnalysis[]): RiskAnalysis[] =>
+    items.map(({ analysisTrace, ...risk }) => risk);
+
   // Load API config on mount
   useEffect(() => {
     const savedConfig = getAPIConfig();
@@ -165,7 +168,7 @@ function App() {
           originalDocument,
           proposedDocument,
           differences,
-          riskAnalyses: analyses,
+          riskAnalyses: toPersistentRiskAnalyses(analyses),
           groupingReviews,
           groupingActionLogs,
           notes,
@@ -240,7 +243,7 @@ function App() {
           originalDocument,
           proposedDocument,
           differences: improvedDifferences,
-          riskAnalyses: nextRiskAnalyses,
+          riskAnalyses: toPersistentRiskAnalyses(nextRiskAnalyses),
           groupingReviews: reviews,
           groupingActionLogs: nextLogs,
           notes,

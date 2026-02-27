@@ -24,6 +24,14 @@ export interface RiskAnalysis {
   explanation: string;
   legalImplication: string;
   recommendation: string;
+  analysisTrace?: {
+    provider: 'proxy' | 'direct';
+    prompt: string;
+    rawResponse: string;
+    route?: string;
+    model?: string;
+    timestamp: string;
+  };
   analyzedAt: Date;
   status?: 'ok' | 'error';
   error?: string;

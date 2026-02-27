@@ -110,6 +110,11 @@ interface StructuralGroupingAssessment {
   rationale: string;
 }
 
+interface RiskAnalysisCallResult {
+  parsed: Record<string, unknown>;
+  trace: NonNullable<RiskAnalysis['analysisTrace']>;
+}
+
 let config: OpenAIConfig | null = null;
 
 export function configureRiskAnalysis(newConfig: OpenAIConfig) {
@@ -121,10 +126,14 @@ export function isConfigured(): boolean {
 }
 
 export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis> {
+  let trace: RiskAnalysis['analysisTrace'];
+
   try {
-    const parsed = hasRiskProxyConfigured()
+    const result = hasRiskProxyConfigured()
       ? await callRiskProxy(difference)
       : await analyzeWithDirectApi(difference);
+    const parsed = result.parsed;
+    trace = result.trace;
 
     return {
       differenceId: difference.id,
@@ -141,6 +150,7 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
         'Consult with legal team before accepting.',
         520
       ),
+      analysisTrace: trace,
       analyzedAt: new Date(),
       status: 'ok',
     };
@@ -153,6 +163,7 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
       explanation: 'Failed to analyze this change automatically.',
       legalImplication: 'Manual review required.',
       recommendation: 'Please review this change manually with your legal team.',
+      analysisTrace: trace,
       analyzedAt: new Date(),
       status: 'error',
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -160,19 +171,32 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
   }
 }
 
-async function analyzeWithDirectApi(difference: Difference): Promise<Record<string, unknown>> {
+async function analyzeWithDirectApi(difference: Difference): Promise<RiskAnalysisCallResult> {
   if (!config || !config.apiKey) {
     throw new Error('Risk analysis not configured. Please provide API key.');
   }
 
-  const prompt = RISK_ANALYSIS_PROMPT
+  const prompt = buildRiskPrompt(difference);
+
+  const response = await callOpenAIJson(prompt);
+  return {
+    parsed: parseRiskResponse(response),
+    trace: {
+      provider: 'direct',
+      prompt,
+      rawResponse: response,
+      model: config.model || 'gpt-4.1-mini',
+      timestamp: new Date().toISOString(),
+    },
+  };
+}
+
+function buildRiskPrompt(difference: Difference): string {
+  return RISK_ANALYSIS_PROMPT
     .replace('{changeType}', difference.type)
     .replace('{originalText}', difference.originalText || '[None - New Addition]')
     .replace('{proposedText}', difference.proposedText || '[None - Deleted]')
     .replace('{context}', difference.context || '[No surrounding context]');
-
-  const response = await callOpenAIJson(prompt);
-  return parseRiskResponse(response);
 }
 
 export async function analyzeAllRisks(
@@ -439,7 +463,7 @@ async function callOpenAIWithMessages(
   return content;
 }
 
-async function callRiskProxy(difference: Difference): Promise<Record<string, unknown>> {
+async function callRiskProxy(difference: Difference): Promise<RiskAnalysisCallResult> {
   const riskProxyUrl = getRiskProxyUrl();
   if (!riskProxyUrl) {
     throw new Error('Risk proxy is not configured.');
@@ -463,7 +487,33 @@ async function callRiskProxy(difference: Difference): Promise<Record<string, unk
     throw new Error('Risk proxy returned invalid response.');
   }
 
-  return data as Record<string, unknown>;
+  const record = data as Record<string, unknown>;
+  const rawTrace =
+    record.analysisTrace && typeof record.analysisTrace === 'object'
+      ? (record.analysisTrace as Record<string, unknown>)
+      : null;
+
+  const promptFallback = buildRiskPrompt(difference);
+  const trace: NonNullable<RiskAnalysis['analysisTrace']> = {
+    provider: 'proxy',
+    prompt:
+      rawTrace && typeof rawTrace.prompt === 'string' && rawTrace.prompt.trim().length > 0
+        ? rawTrace.prompt
+        : promptFallback,
+    rawResponse:
+      rawTrace && typeof rawTrace.rawResponse === 'string' ? rawTrace.rawResponse : '',
+    route: rawTrace && typeof rawTrace.route === 'string' ? rawTrace.route : riskProxyUrl,
+    model: rawTrace && typeof rawTrace.model === 'string' ? rawTrace.model : undefined,
+    timestamp:
+      rawTrace && typeof rawTrace.timestamp === 'string'
+        ? rawTrace.timestamp
+        : new Date().toISOString(),
+  };
+
+  return {
+    parsed: record,
+    trace,
+  };
 }
 
 async function callRiskFollowupProxy(

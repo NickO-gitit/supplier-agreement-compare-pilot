@@ -83,11 +83,22 @@ module.exports = async function (context, req) {
     const rawContent = extractModelText(data);
     const parsed = parseRiskResponse(rawContent);
     const normalized = normalizeParsedRisk(parsed);
+    const analysisTrace = {
+      provider: "proxy",
+      prompt,
+      rawResponse: typeof rawContent === "string" ? rawContent : "",
+      route: endpoint,
+      model: deployment,
+      timestamp: new Date().toISOString()
+    };
 
     context.res = {
       status: 200,
       headers: { "Content-Type": "application/json" },
-      body: normalized
+      body: {
+        ...normalized,
+        analysisTrace
+      }
     };
   } catch (error) {
     context.res = {
