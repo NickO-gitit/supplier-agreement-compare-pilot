@@ -78,6 +78,7 @@ function App() {
   const [isReviewingGrouping, setIsReviewingGrouping] = useState(false);
   const [groupingReviewProgress, setGroupingReviewProgress] = useState({ completed: 0, total: 0 });
   const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showRiskDisclaimer, setShowRiskDisclaimer] = useState(false);
   const [apiConfig, setApiConfig] = useState<APIConfig | null>(null);
 
   const toPersistentRiskAnalyses = (items: RiskAnalysis[]): RiskAnalysis[] =>
@@ -110,6 +111,8 @@ function App() {
 
     setIsComparing(true);
     setAppState('comparing');
+    setShowRiskDisclaimer(false);
+    setRiskAnalyses([]);
 
     // Small delay to show loading state
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -140,6 +143,28 @@ function App() {
       saveComparison(comparison);
 
       setAppState('results');
+
+      if (result.differences.length > 0 && isConfigured()) {
+        setIsAnalyzing(true);
+        setAnalysisProgress({ completed: 0, total: result.differences.length });
+
+        try {
+          const analyses = await analyzeAllRisks(result.differences, (completed, total) => {
+            setAnalysisProgress({ completed, total });
+          });
+          setRiskAnalyses(analyses);
+          setShowRiskDisclaimer(true);
+
+          saveComparison({
+            ...comparison,
+            riskAnalyses: toPersistentRiskAnalyses(analyses),
+          });
+        } catch (analysisError) {
+          console.error('Automatic risk analysis failed:', analysisError);
+        } finally {
+          setIsAnalyzing(false);
+        }
+      }
     } catch (error) {
       console.error('Comparison failed:', error);
       setAppState('upload');
@@ -160,6 +185,7 @@ function App() {
         setAnalysisProgress({ completed, total });
       });
       setRiskAnalyses(analyses);
+      setShowRiskDisclaimer(true);
 
       // Update saved comparison
       if (comparisonId) {
@@ -325,6 +351,7 @@ function App() {
     setSelectedDiffId(null);
     setComparisonId(null);
     setDiffSelectionAnchorMap({});
+    setShowRiskDisclaimer(false);
   };
 
   // Export report
@@ -764,6 +791,32 @@ function App() {
         onExportVerboseLog={handleExportVerboseLog}
         currentConfig={apiConfig}
       />
+
+      {showRiskDisclaimer && (
+        <div className="fixed inset-0 z-[70] bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border border-slate-200 p-6">
+            <h3 className="text-lg font-semibold text-slate-800 mb-3">AI Risk Analysis Notice</h3>
+            <div className="space-y-3 text-sm text-slate-600">
+              <p>
+                This risk assessment is AI-generated decision support, not legal advice. It may miss contractual
+                context, business dependencies, or jurisdiction-specific requirements.
+              </p>
+              <p>
+                Treat every rating and recommendation as a draft input. You are responsible for final review and
+                approval, and material changes should be validated by qualified legal counsel.
+              </p>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                onClick={() => setShowRiskDisclaimer(false)}
+                className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                I Understand
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

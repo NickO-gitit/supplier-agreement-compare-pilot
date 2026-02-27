@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle, AlertCircle, Loader2, Shield, Zap, Settings, MessageSquare, ArrowDownUp, RefreshCw, Download, StickyNote, X } from 'lucide-react';
 import type { Difference, RiskAnalysis, Note } from '../types';
 import { askRiskFollowUp } from '../services/riskAnalysis';
@@ -79,6 +79,9 @@ export function RiskAnalysisPanel({
   const [followUpByDifference, setFollowUpByDifference] = useState<
     Record<string, Array<{ question: string; answer: string; askedAt: Date }>>
   >({});
+  const rightPaneScrollRef = useRef<HTMLDivElement | null>(null);
+  const selectedRiskCardRef = useRef<HTMLDivElement | null>(null);
+  const lastAutoScrolledDiffRef = useRef<string | null>(null);
 
   useEffect(() => {
     setFollowUpQuestion('');
@@ -108,6 +111,21 @@ export function RiskAnalysisPanel({
   const selectedExplanation = sanitizeDisplayText(selectedRisk?.explanation);
   const selectedLegalImplication = sanitizeDisplayText(selectedRisk?.legalImplication);
   const selectedRecommendation = sanitizeDisplayText(selectedRisk?.recommendation);
+
+  useEffect(() => {
+    if (!selectedDiffId || !selectedRisk) {
+      return;
+    }
+    if (lastAutoScrolledDiffRef.current === selectedDiffId) {
+      return;
+    }
+
+    lastAutoScrolledDiffRef.current = selectedDiffId;
+    rightPaneScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    requestAnimationFrame(() => {
+      selectedRiskCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [selectedDiffId, selectedRisk]);
 
   const analyzedRisks = riskAnalyses.filter((r) => r.status !== 'error');
   const errorCount = riskAnalyses.filter((r) => r.status === 'error').length;
@@ -397,9 +415,12 @@ export function RiskAnalysisPanel({
         )}
       </div>
 
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div ref={rightPaneScrollRef} className="flex-1 overflow-auto p-4 space-y-4">
         {selectedRisk ? (
-          <div className={`p-4 rounded-xl border-2 ${getRiskBgColor(selectedRisk.riskLevel, selectedIsError)}`}>
+          <div
+            ref={selectedRiskCardRef}
+            className={`p-4 rounded-xl border-2 ${getRiskBgColor(selectedRisk.riskLevel, selectedIsError)}`}
+          >
             <div className="flex items-center gap-2 mb-4">
               {getRiskIcon(selectedRisk.riskLevel, selectedIsError)}
               <span className="font-semibold text-slate-800 capitalize">
