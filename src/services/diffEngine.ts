@@ -46,6 +46,20 @@ interface ChangePart {
   proposedText: string | null;
 }
 
+interface TextLineIndex {
+  starts: number[];
+  ends: number[];
+  lines: string[];
+}
+
+interface NumberedHeadingInfo {
+  id: string;
+  level: number;
+}
+
+const MAX_SECTION_CONTEXT_CHARS = 3200;
+const MAX_PARAGRAPH_CONTEXT_CHARS = 1800;
+
 /**
  * Computes differences between two texts using diff-match-patch
  * This is a deterministic algorithm - no AI/LLM involved
@@ -56,9 +70,11 @@ export function computeDiff(
   proposedText: string,
   mode: DiffMode = 'word'
 ): DiffResult {
+  const normalizedOriginal = normalizeText(originalText);
+  const normalizedProposed = normalizeText(proposedText);
   const diffs = getDiffs(originalText, proposedText, mode);
   const units = buildDiffUnits(diffs);
-  const differences = convertUnitsToDifferences(units);
+  const differences = convertUnitsToDifferences(units, normalizedOriginal, normalizedProposed);
 
   // Calculate summary
   const summary = {
@@ -141,8 +157,14 @@ function adjustToParagraphLevel(diffs: [number, string][]): [number, string][] {
   return diffs;
 }
 
-function convertUnitsToDifferences(units: DiffUnit[]): Difference[] {
+function convertUnitsToDifferences(
+  units: DiffUnit[],
+  originalText: string,
+  proposedText: string
+): Difference[] {
   const differences: Difference[] = [];
+  const originalIndex = buildLineIndex(originalText);
+  const proposedIndex = buildLineIndex(proposedText);
 
   for (let i = 0; i < units.length; i++) {
     const unit = units[i];
@@ -159,7 +181,15 @@ function convertUnitsToDifferences(units: DiffUnit[]): Difference[] {
       type: unit.type,
       originalText: unit.originalText,
       proposedText: unit.proposedText,
-      context: getContextFromUnits(units, i),
+      context: buildDifferenceContext(
+        units,
+        i,
+        unit,
+        originalText,
+        proposedText,
+        originalIndex,
+        proposedIndex
+      ),
     };
 
     if (unit.originalText !== null) {
@@ -1293,6 +1323,296 @@ function getContextFromUnits(units: DiffUnit[], currentIndex: number): string {
   }
 
   return [before, after].filter((part) => part.length > 0).join('...').trim();
+}
+
+function buildDifferenceContext(
+  units: DiffUnit[],
+  currentIndex: number,
+  unit: DiffUnitChange,
+  originalText: string,
+  proposedText: string,
+  originalIndex: TextLineIndex,
+  proposedIndex: TextLineIndex
+): string {
+  const originalSection =
+    unit.originalText !== null
+      ? extractSectionContext(originalText, originalIndex, unit.originalStart, unit.originalEnd)
+      : '';
+  const proposedSection =
+    unit.proposedText !== null
+      ? extractSectionContext(proposedText, proposedIndex, unit.proposedStart, unit.proposedEnd)
+      : '';
+
+  if (!originalSection && !proposedSection) {
+    return getContextFromUnits(units, currentIndex);
+  }
+
+  return [
+    originalSection ? `Original section context:\n${originalSection}` : 'Original section context:\n[Not available]',
+    proposedSection ? `Proposed section context:\n${proposedSection}` : 'Proposed section context:\n[Not available]',
+  ].join('\n\n');
+}
+
+function extractSectionContext(
+  text: string,
+  index: TextLineIndex,
+  start: number,
+  end: number
+): string {
+  if (!text || text.trim().length === 0) {
+    return '';
+  }
+
+  const clampedStart = clampPosition(start, text.length);
+  const clampedEnd = clampPosition(end, text.length);
+  const anchorPosition = clampedStart <= clampedEnd ? clampedStart : clampedEnd;
+  const anchorLine = findLineIndexForPosition(index, anchorPosition);
+
+  const headingContext = extractByHeading(text, index, anchorLine, anchorPosition);
+  if (headingContext) {
+    return headingContext;
+  }
+
+  return extractByParagraphs(text, index, anchorLine, anchorPosition);
+}
+
+function extractByHeading(
+  text: string,
+  index: TextLineIndex,
+  anchorLine: number,
+  anchorPosition: number
+): string {
+  const headingLine = findNearestHeadingLine(index, anchorLine);
+  if (headingLine < 0) {
+    return '';
+  }
+
+  const headingInfo = getNumberedHeadingInfo(index.lines[headingLine]);
+  let endLine = index.lines.length;
+
+  for (let line = headingLine + 1; line < index.lines.length; line++) {
+    if (!isHeadingLine(index.lines[line])) {
+      continue;
+    }
+
+    if (!headingInfo) {
+      endLine = line;
+      break;
+    }
+
+    const candidateInfo = getNumberedHeadingInfo(index.lines[line]);
+    if (!candidateInfo || candidateInfo.level <= headingInfo.level) {
+      endLine = line;
+      break;
+    }
+  }
+
+  const sectionStart = index.starts[headingLine] ?? 0;
+  const sectionEnd =
+    endLine < index.lines.length
+      ? index.starts[endLine]
+      : index.ends[index.ends.length - 1] ?? text.length;
+
+  const section = extractBoundedSlice(
+    text,
+    sectionStart,
+    sectionEnd,
+    anchorPosition,
+    MAX_SECTION_CONTEXT_CHARS
+  );
+
+  return section.trim();
+}
+
+function extractByParagraphs(
+  text: string,
+  index: TextLineIndex,
+  anchorLine: number,
+  anchorPosition: number
+): string {
+  const paragraphStart = findParagraphStart(index, anchorLine);
+  const paragraphEnd = findParagraphEnd(index, anchorLine);
+
+  let startLine = paragraphStart;
+  let endLine = paragraphEnd;
+
+  // Expand by one neighboring paragraph on each side for better legal context.
+  const previousParagraphStart = findPreviousParagraphStart(index, paragraphStart);
+  if (previousParagraphStart >= 0) {
+    startLine = previousParagraphStart;
+  }
+
+  const nextParagraphEnd = findNextParagraphEnd(index, paragraphEnd);
+  if (nextParagraphEnd >= 0) {
+    endLine = nextParagraphEnd;
+  }
+
+  const sliceStart = index.starts[startLine] ?? 0;
+  const sliceEnd = index.ends[endLine] ?? text.length;
+  const context = extractBoundedSlice(
+    text,
+    sliceStart,
+    sliceEnd,
+    anchorPosition,
+    MAX_PARAGRAPH_CONTEXT_CHARS
+  );
+
+  return context.trim();
+}
+
+function buildLineIndex(text: string): TextLineIndex {
+  const lines = text.split('\n');
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let cursor = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    starts.push(cursor);
+    const hasNewline = i < lines.length - 1;
+    const lineLength = lines[i].length + (hasNewline ? 1 : 0);
+    cursor += lineLength;
+    ends.push(cursor);
+  }
+
+  return { starts, ends, lines };
+}
+
+function findLineIndexForPosition(index: TextLineIndex, position: number): number {
+  const safePosition = clampPosition(position, index.ends[index.ends.length - 1] ?? 0);
+  let low = 0;
+  let high = index.starts.length - 1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const start = index.starts[mid];
+    const end = index.ends[mid];
+    if (safePosition < start) {
+      high = mid - 1;
+      continue;
+    }
+    if (safePosition >= end) {
+      low = mid + 1;
+      continue;
+    }
+    return mid;
+  }
+
+  return Math.max(0, Math.min(index.starts.length - 1, low));
+}
+
+function findNearestHeadingLine(index: TextLineIndex, anchorLine: number): number {
+  for (let line = anchorLine; line >= 0; line--) {
+    if (isHeadingLine(index.lines[line])) {
+      return line;
+    }
+  }
+  return -1;
+}
+
+function isHeadingLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (startsWithMarker(trimmed)) {
+    return false;
+  }
+
+  if (getNumberedHeadingInfo(trimmed)) {
+    return true;
+  }
+
+  // Uppercase title heading fallback for less structured files.
+  return /^[A-Z][A-Z0-9\s,&()/'"\-]{4,}$/.test(trimmed);
+}
+
+function getNumberedHeadingInfo(line: string): NumberedHeadingInfo | null {
+  const match = line.match(/^\s*(\d+(?:\.\d+){0,6})\.?\s+\S/);
+  if (!match) {
+    return null;
+  }
+  const id = match[1];
+  const level = id.split('.').length;
+  return { id, level };
+}
+
+function findParagraphStart(index: TextLineIndex, lineIndex: number): number {
+  let line = lineIndex;
+  while (line > 0 && index.lines[line - 1].trim().length > 0) {
+    line--;
+  }
+  return line;
+}
+
+function findParagraphEnd(index: TextLineIndex, lineIndex: number): number {
+  let line = lineIndex;
+  while (line < index.lines.length - 1 && index.lines[line + 1].trim().length > 0) {
+    line++;
+  }
+  return line;
+}
+
+function findPreviousParagraphStart(index: TextLineIndex, currentParagraphStart: number): number {
+  let line = currentParagraphStart - 1;
+  while (line >= 0 && index.lines[line].trim().length === 0) {
+    line--;
+  }
+  if (line < 0) {
+    return -1;
+  }
+  return findParagraphStart(index, line);
+}
+
+function findNextParagraphEnd(index: TextLineIndex, currentParagraphEnd: number): number {
+  let line = currentParagraphEnd + 1;
+  while (line < index.lines.length && index.lines[line].trim().length === 0) {
+    line++;
+  }
+  if (line >= index.lines.length) {
+    return -1;
+  }
+  return findParagraphEnd(index, line);
+}
+
+function extractBoundedSlice(
+  text: string,
+  start: number,
+  end: number,
+  anchorPosition: number,
+  maxChars: number
+): string {
+  const safeStart = clampPosition(start, text.length);
+  const safeEnd = clampPosition(end, text.length);
+  if (safeEnd <= safeStart) {
+    return '';
+  }
+
+  const spanLength = safeEnd - safeStart;
+  if (spanLength <= maxChars) {
+    return text.slice(safeStart, safeEnd);
+  }
+
+  const introLength = Math.min(900, Math.floor(maxChars * 0.35));
+  const introEnd = safeStart + introLength;
+  const anchor = clampPosition(anchorPosition, text.length);
+
+  const tailBudget = Math.max(400, maxChars - introLength - 6);
+  let tailStart = Math.max(introEnd, anchor - Math.floor(tailBudget / 2));
+  let tailEnd = Math.min(safeEnd, tailStart + tailBudget);
+  if (tailEnd - tailStart < tailBudget) {
+    tailStart = Math.max(introEnd, tailEnd - tailBudget);
+  }
+
+  const intro = text.slice(safeStart, introEnd).trimEnd();
+  const tail = text.slice(tailStart, tailEnd).trim();
+  return `${intro}\n...\n${tail}`;
+}
+
+function clampPosition(value: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(max, Math.floor(value)));
 }
 
 function shouldPairAsModification(deletedPart: string, addedPart: string): boolean {
