@@ -114,16 +114,153 @@ function parseRiskResponse(raw) {
     throw new Error("Model response content was empty.");
   }
 
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start !== -1 && end !== -1 && end > start) {
-      return JSON.parse(raw.slice(start, end + 1));
-    }
-    throw new Error("Model did not return valid JSON.");
+  const direct = tryParseJsonCandidate(raw);
+  if (direct) {
+    return direct;
   }
+
+  for (const candidate of extractJsonCandidates(raw)) {
+    const parsed = tryParseJsonCandidate(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const fallback = parseRiskFromText(raw);
+  if (hasMeaningfulRiskFields(fallback)) {
+    return fallback;
+  }
+
+  throw new Error("Model did not return valid JSON.");
+}
+
+function tryParseJsonCandidate(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = stripCodeFences(value.trim());
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Try a minimal cleanup pass for common trailing-comma issues.
+    const sanitized = trimmed.replace(/,\s*([}\]])/g, "$1");
+    try {
+      return JSON.parse(sanitized);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function extractJsonCandidates(raw) {
+  const candidates = [];
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match;
+  while ((match = codeBlockRegex.exec(raw)) !== null) {
+    if (match[1]) {
+      candidates.push(match[1].trim());
+    }
+  }
+
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    candidates.push(raw.slice(start, end + 1));
+  }
+
+  return candidates;
+}
+
+function stripCodeFences(text) {
+  if (!text.startsWith("```")) {
+    return text;
+  }
+
+  return text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+}
+
+function parseRiskFromText(raw) {
+  const riskLevel =
+    extractRiskLevel(raw) ||
+    "";
+
+  const category =
+    extractLabeledField(raw, ["category", "risk category"]) ||
+    "";
+
+  const explanation =
+    extractLabeledField(raw, ["what changed", "explanation", "change summary"]) ||
+    "";
+
+  const legalImplication =
+    extractLabeledField(raw, ["legal implication", "impact", "legal impact"]) ||
+    "";
+
+  const recommendation =
+    extractLabeledField(raw, ["recommendation", "recommended action", "action"]) ||
+    "";
+
+  return {
+    riskLevel,
+    category,
+    explanation,
+    legalImplication,
+    recommendation
+  };
+}
+
+function extractRiskLevel(text) {
+  const lower = text.toLowerCase();
+  const labeled = lower.match(/(?:risk\s*level|risk)\s*[:\-]\s*(low|medium|high)\b/i);
+  if (labeled && labeled[1]) {
+    return labeled[1].toLowerCase();
+  }
+
+  const standalone = lower.match(/\b(low|medium|high)\s+risk\b/i);
+  return standalone && standalone[1] ? standalone[1].toLowerCase() : "";
+}
+
+function extractLabeledField(text, labels) {
+  const escapedLabels = labels.map(escapeRegex);
+  const labelGroup = escapedLabels.join("|");
+  const pattern = new RegExp(
+    `(?:^|\\n)\\s*(?:${labelGroup})\\s*[:\\-]\\s*([\\s\\S]*?)(?=\\n\\s*[A-Za-z][^\\n]{0,40}[:\\-]|$)`,
+    "i"
+  );
+  const match = text.match(pattern);
+  if (!match || !match[1]) {
+    return "";
+  }
+
+  return match[1]
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasMeaningfulRiskFields(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    return false;
+  }
+
+  return Boolean(
+    (typeof parsed.riskLevel === "string" && parsed.riskLevel.trim()) ||
+    (typeof parsed.category === "string" && parsed.category.trim()) ||
+    (typeof parsed.explanation === "string" && parsed.explanation.trim()) ||
+    (typeof parsed.legalImplication === "string" && parsed.legalImplication.trim()) ||
+    (typeof parsed.recommendation === "string" && parsed.recommendation.trim())
+  );
 }
 
 function normalizeRiskLevel(value) {
