@@ -250,15 +250,15 @@ export function RiskAnalysisPanel({
         <div className="p-4 bg-slate-100 rounded-2xl mb-4">
           <Settings className="w-10 h-10 text-slate-400" />
         </div>
-        <h3 className="font-semibold text-slate-800 mb-2">Risk Analysis Not Configured</h3>
+        <h3 className="font-semibold text-slate-800 mb-2">Risk Analysis Backend Not Available</h3>
         <p className="text-sm text-slate-500 mb-5 max-w-xs">
-          Configure your OpenAI API key to enable AI-powered legal risk analysis of changes.
+          AI provider settings are managed in the backend deployment. Verify backend configuration in Azure and app settings.
         </p>
         <button
           onClick={onConfigure}
           className="px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg shadow-indigo-500/25"
         >
-          Configure API Key
+          Open Settings
         </button>
       </div>
     );

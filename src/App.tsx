@@ -8,7 +8,6 @@ import { APIConfigModal } from './components/APIConfigModal';
 import { computeDiff } from './services/diffEngine';
 import { applyGroupingSuggestions } from './services/groupingAutomation';
 import {
-  configureRiskAnalysis,
   isConfigured,
   isGroupingReviewConfigured,
   analyzeAllRisks,
@@ -17,8 +16,6 @@ import {
 import {
   saveComparison,
   getComparisons,
-  getAPIConfig,
-  saveAPIConfig,
   saveNote,
   deleteNote,
   getNotesForComparison,
@@ -33,32 +30,8 @@ import type {
   Note,
   Comparison,
 } from './types';
-import type { APIConfig } from './services/storage';
 
 type AppState = 'upload' | 'comparing' | 'results';
-const env = import.meta.env;
-
-function getAPIConfigFromEnv(): APIConfig | null {
-  if (env.VITE_OPENAI_API_KEY) {
-    return {
-      apiKey: env.VITE_OPENAI_API_KEY,
-      isAzure: false,
-      model: env.VITE_OPENAI_MODEL || 'gpt-4.1-mini',
-    };
-  }
-
-  if (env.VITE_AZURE_OPENAI_KEY && env.VITE_AZURE_OPENAI_ENDPOINT && env.VITE_AZURE_OPENAI_DEPLOYMENT) {
-    return {
-      apiKey: env.VITE_AZURE_OPENAI_KEY,
-      isAzure: true,
-      endpoint: env.VITE_AZURE_OPENAI_ENDPOINT,
-      deploymentName: env.VITE_AZURE_OPENAI_DEPLOYMENT,
-    };
-  }
-
-  return null;
-}
-
 function App() {
   const [appState, setAppState] = useState<AppState>('upload');
   const [originalDocument, setOriginalDocument] = useState<Document | null>(null);
@@ -79,31 +52,9 @@ function App() {
   const [groupingReviewProgress, setGroupingReviewProgress] = useState({ completed: 0, total: 0 });
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showRiskDisclaimer, setShowRiskDisclaimer] = useState(false);
-  const [apiConfig, setApiConfig] = useState<APIConfig | null>(null);
 
   const toPersistentRiskAnalyses = (items: RiskAnalysis[]): RiskAnalysis[] =>
     items.map(({ analysisTrace, ...risk }) => risk);
-
-  // Load API config on mount
-  useEffect(() => {
-    const savedConfig = getAPIConfig();
-    const config = savedConfig || getAPIConfigFromEnv();
-
-    if (config) {
-      if (savedConfig) {
-        setApiConfig(savedConfig);
-      } else {
-        setApiConfig(config);
-      }
-      configureRiskAnalysis({
-        apiKey: config.apiKey,
-        isAzure: config.isAzure,
-        endpoint: config.endpoint,
-        deploymentName: config.deploymentName,
-        model: config.model,
-      });
-    }
-  }, []);
 
   // Perform comparison when both documents are loaded
   const handleCompare = useCallback(async () => {
@@ -295,19 +246,6 @@ function App() {
     selectedDiffId,
   ]);
 
-  // Handle API config save
-  const handleSaveAPIConfig = (config: APIConfig) => {
-    setApiConfig(config);
-    saveAPIConfig(config);
-    configureRiskAnalysis({
-      apiKey: config.apiKey,
-      isAzure: config.isAzure,
-      endpoint: config.endpoint,
-      deploymentName: config.deploymentName,
-      model: config.model,
-    });
-  };
-
   // Notes handlers
   const handleAddNote = (note: Note) => {
     if (comparisonId) {
@@ -368,12 +306,6 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  const maskSecret = (value?: string) => {
-    if (!value) return '';
-    if (value.length <= 8) return '********';
-    return `${value.slice(0, 4)}...${value.slice(-4)}`;
-  };
-
   const handleExportVerboseLog = () => {
     const now = new Date();
     const storedComparisons = getComparisons();
@@ -387,16 +319,10 @@ function App() {
         language: navigator.language,
         url: window.location.href,
       },
-      apiConfiguration: apiConfig
-        ? {
-            provider: apiConfig.isAzure ? 'azure' : 'openai',
-            hasApiKey: !!apiConfig.apiKey,
-            apiKeyMasked: maskSecret(apiConfig.apiKey),
-            endpoint: apiConfig.endpoint || null,
-            deploymentName: apiConfig.deploymentName || null,
-            model: apiConfig.model || null,
-          }
-        : null,
+      apiConfiguration: {
+        managedByBackend: true,
+        configuredInBrowser: false,
+      },
       currentSession: {
         comparisonId,
         selectedDiffId,
@@ -787,9 +713,7 @@ function App() {
       <APIConfigModal
         isOpen={showConfigModal}
         onClose={() => setShowConfigModal(false)}
-        onSave={handleSaveAPIConfig}
         onExportVerboseLog={handleExportVerboseLog}
-        currentConfig={apiConfig}
       />
 
       {showRiskDisclaimer && (
