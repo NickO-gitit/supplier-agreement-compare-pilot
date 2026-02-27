@@ -43,6 +43,27 @@ export function RiskAnalysisPanel({
   onUpdateNote,
   onDeleteNote,
 }: RiskAnalysisPanelProps) {
+  const sanitizeDisplayText = (value: string | undefined): string => {
+    if (!value) return '';
+    const withoutThink = value
+      .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+      .replace(/<\/?think>/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const marker = /\b(wait,|now,\s*considering|let me|i should|i need to|i will)\b/i.exec(withoutThink);
+    const clipped = marker && marker.index > 0 ? withoutThink.slice(0, marker.index).trim() : withoutThink;
+    return clipped;
+  };
+
+  const sanitizeCategory = (value: string | undefined): string => {
+    const cleaned = sanitizeDisplayText(value);
+    if (!cleaned || cleaned.length > 48 || /[.!?]/.test(cleaned)) {
+      return 'Other';
+    }
+    return cleaned;
+  };
+
   const [riskOrderMode, setRiskOrderMode] = useState<'risk' | 'document'>(() => {
     try {
       const saved = localStorage.getItem('risk-order-mode');
@@ -83,6 +104,10 @@ export function RiskAnalysisPanel({
     selectedDiffId && followUpByDifference[selectedDiffId]
       ? followUpByDifference[selectedDiffId]
       : [];
+  const selectedCategory = sanitizeCategory(selectedRisk?.category);
+  const selectedExplanation = sanitizeDisplayText(selectedRisk?.explanation);
+  const selectedLegalImplication = sanitizeDisplayText(selectedRisk?.legalImplication);
+  const selectedRecommendation = sanitizeDisplayText(selectedRisk?.recommendation);
 
   const analyzedRisks = riskAnalyses.filter((r) => r.status !== 'error');
   const errorCount = riskAnalyses.filter((r) => r.status === 'error').length;
@@ -380,25 +405,28 @@ export function RiskAnalysisPanel({
               <span className="font-semibold text-slate-800 capitalize">
                 {selectedIsError ? 'Analysis Error' : `${selectedRisk.riskLevel} Risk`}
               </span>
-              <span className="px-2 py-0.5 bg-white/60 rounded-lg text-xs font-medium text-slate-600">
-                {selectedRisk.category}
+              <span
+                className="px-2 py-0.5 bg-white/60 rounded-lg text-xs font-medium text-slate-600 max-w-[14rem] truncate"
+                title={selectedCategory}
+              >
+                {selectedCategory}
               </span>
             </div>
 
             <div className="space-y-4">
               <div>
                 <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">What Changed</h4>
-                <p className="text-sm text-slate-700">{selectedRisk.explanation}</p>
+                <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{selectedExplanation}</p>
               </div>
 
               <div>
                 <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Legal Implication</h4>
-                <p className="text-sm text-slate-700">{selectedRisk.legalImplication}</p>
+                <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{selectedLegalImplication}</p>
               </div>
 
               <div>
                 <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Recommendation</h4>
-                <p className="text-sm text-slate-700">{selectedRisk.recommendation}</p>
+                <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{selectedRecommendation}</p>
               </div>
 
               {selectedIsError && selectedRisk.error && (
@@ -469,6 +497,8 @@ export function RiskAnalysisPanel({
             const isError = risk.status === 'error';
             const selected = selectedDiffId === risk.differenceId;
             const noteCount = notesByDifference[risk.differenceId] || 0;
+            const displayCategory = sanitizeCategory(risk.category);
+            const displayExplanation = sanitizeDisplayText(risk.explanation);
             return (
               <div
                 key={risk.differenceId}
@@ -482,8 +512,11 @@ export function RiskAnalysisPanel({
                   <span className="text-sm font-semibold text-slate-800 capitalize">
                     {isError ? 'Analysis Error' : `${risk.riskLevel} Risk`}
                   </span>
-                  <span className="px-2 py-0.5 bg-white/60 rounded-lg text-xs font-medium text-slate-600">
-                    {risk.category}
+                  <span
+                    className="px-2 py-0.5 bg-white/60 rounded-lg text-xs font-medium text-slate-600 max-w-[10rem] truncate"
+                    title={displayCategory}
+                  >
+                    {displayCategory}
                   </span>
                   <button
                     onClick={(event) => {
@@ -498,7 +531,7 @@ export function RiskAnalysisPanel({
                     Notes {noteCount > 0 ? `(${noteCount})` : ''}
                   </button>
                 </div>
-                <p className="text-sm text-slate-700 line-clamp-2">{risk.explanation}</p>
+                <p className="text-sm text-slate-700 line-clamp-2">{displayExplanation}</p>
               </div>
             );
           })}

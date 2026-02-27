@@ -6,10 +6,17 @@ interface APIConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (config: APIConfig) => void;
+  onExportVerboseLog: () => void;
   currentConfig: APIConfig | null;
 }
 
-export function APIConfigModal({ isOpen, onClose, onSave, currentConfig }: APIConfigModalProps) {
+export function APIConfigModal({
+  isOpen,
+  onClose,
+  onSave,
+  onExportVerboseLog,
+  currentConfig,
+}: APIConfigModalProps) {
   const [isAzure, setIsAzure] = useState(currentConfig?.isAzure ?? false);
   const [apiKey, setApiKey] = useState(currentConfig?.apiKey ?? '');
   const [endpoint, setEndpoint] = useState(currentConfig?.endpoint ?? '');
@@ -185,7 +192,15 @@ export function APIConfigModal({ isOpen, onClose, onSave, currentConfig }: APICo
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 p-4 border-t bg-gray-50 rounded-b-xl">
+        <div className="flex justify-between gap-3 p-4 border-t bg-gray-50 rounded-b-xl">
+          <button
+            onClick={onExportVerboseLog}
+            className="px-4 py-2 text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
+            title="Export detailed runtime diagnostics and analysis logs"
+          >
+            Export Verbose Log
+          </button>
+          <div className="flex gap-3">
           <button
             onClick={onClose}
             className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
@@ -199,6 +214,7 @@ export function APIConfigModal({ isOpen, onClose, onSave, currentConfig }: APICo
           >
             Save Configuration
           </button>
+          </div>
         </div>
       </div>
     </div>

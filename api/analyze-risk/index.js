@@ -3,7 +3,12 @@ const { postChatCompletionWithVersionFallback } = require("../shared/foundryClie
 const RISK_ANALYSIS_PROMPT = `You are a legal expert analyzing changes to a supplier framework agreement.
 Analyze the following change and provide a risk assessment for the CUSTOMER (not the supplier).
 
-IMPORTANT: Be concise. Focus on the practical business and legal implications.
+IMPORTANT: Be concise. Focus on practical business and legal implications.
+IMPORTANT OUTPUT RULES:
+- Return VALID JSON only.
+- Do NOT include chain-of-thought, self-talk, internal reasoning, or <think> tags.
+- Do NOT include markdown, code fences, or extra keys.
+- Keep each text field short (1-2 sentences).
 
 Change Type: {changeType}
 Original Text: {originalText}
@@ -63,7 +68,8 @@ module.exports = async function (context, req) {
         messages: [
           {
             role: "system",
-            content: "You are a legal expert specializing in commercial contract analysis. Always respond with valid JSON only."
+            content:
+              "You are a legal expert specializing in commercial contract analysis. Return valid JSON only with final answers. Never output chain-of-thought or <think> content."
           },
           {
             role: "user",
@@ -71,24 +77,17 @@ module.exports = async function (context, req) {
           }
         ],
         temperature: 0.3,
-        max_tokens: 500
+        max_tokens: 700
       }
     });
-    const rawContent = data && data.choices && data.choices[0] && data.choices[0].message
-      ? data.choices[0].message.content
-      : "";
+    const rawContent = extractModelText(data);
     const parsed = parseRiskResponse(rawContent);
+    const normalized = normalizeParsedRisk(parsed);
 
     context.res = {
       status: 200,
       headers: { "Content-Type": "application/json" },
-      body: {
-        riskLevel: normalizeRiskLevel(parsed.riskLevel),
-        category: stringOrFallback(parsed.category, "Other"),
-        explanation: stringOrFallback(parsed.explanation, "Unable to analyze this change."),
-        legalImplication: stringOrFallback(parsed.legalImplication, "Review with legal counsel recommended."),
-        recommendation: stringOrFallback(parsed.recommendation, "Consult with legal team before accepting.")
-      }
+      body: normalized
     };
   } catch (error) {
     context.res = {
@@ -109,24 +108,68 @@ function parseRequestBody(body) {
   return body;
 }
 
+function extractModelText(data) {
+  const content =
+    data && data.choices && data.choices[0] && data.choices[0].message
+      ? data.choices[0].message.content
+      : "";
+
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    const parts = content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object") {
+          if (typeof item.text === "string") {
+            return item.text;
+          }
+          if (item.type === "text" && typeof item.content === "string") {
+            return item.content;
+          }
+        }
+        return "";
+      })
+      .filter(Boolean);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
+
+  if (typeof data?.output_text === "string") {
+    return data.output_text;
+  }
+  if (Array.isArray(data?.output_text)) {
+    return data.output_text.filter((part) => typeof part === "string").join("\n");
+  }
+
+  return "";
+}
+
 function parseRiskResponse(raw) {
   if (!raw || typeof raw !== "string") {
     throw new Error("Model response content was empty.");
   }
 
-  const direct = tryParseJsonCandidate(raw);
+  const sanitizedRaw = sanitizeModelText(raw);
+
+  const direct = tryParseJsonCandidate(sanitizedRaw);
   if (direct) {
     return direct;
   }
 
-  for (const candidate of extractJsonCandidates(raw)) {
+  for (const candidate of extractJsonCandidates(sanitizedRaw)) {
     const parsed = tryParseJsonCandidate(candidate);
     if (parsed) {
       return parsed;
     }
   }
 
-  const fallback = parseRiskFromText(raw);
+  const fallback = parseRiskFromText(sanitizedRaw);
   if (hasMeaningfulRiskFields(fallback)) {
     return fallback;
   }
@@ -145,12 +188,14 @@ function tryParseJsonCandidate(value) {
   }
 
   try {
-    return JSON.parse(trimmed);
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
     // Try a minimal cleanup pass for common trailing-comma issues.
     const sanitized = trimmed.replace(/,\s*([}\]])/g, "$1");
     try {
-      return JSON.parse(sanitized);
+      const reparsed = JSON.parse(sanitized);
+      return reparsed && typeof reparsed === "object" && !Array.isArray(reparsed) ? reparsed : null;
     } catch {
       return null;
     }
@@ -193,7 +238,7 @@ function parseRiskFromText(raw) {
     "";
 
   const category =
-    extractLabeledField(raw, ["category", "risk category"]) ||
+    extractSingleLineLabeledField(raw, ["category", "risk category"]) ||
     "";
 
   const explanation =
@@ -245,6 +290,23 @@ function extractLabeledField(text, labels) {
     .trim();
 }
 
+function extractSingleLineLabeledField(text, labels) {
+  const escapedLabels = labels.map(escapeRegex);
+  const labelGroup = escapedLabels.join("|");
+  const pattern = new RegExp(
+    `(?:^|\\n)\\s*(?:${labelGroup})\\s*[:\\-]\\s*([^\\n]+)`,
+    "i"
+  );
+  const match = text.match(pattern);
+  if (!match || !match[1]) {
+    return "";
+  }
+
+  return match[1]
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -273,6 +335,159 @@ function normalizeRiskLevel(value) {
 
 function stringOrFallback(value, fallback) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function normalizeParsedRisk(parsed) {
+  return {
+    riskLevel: normalizeRiskLevel(parsed.riskLevel),
+    category: normalizeCategory(parsed.category),
+    explanation: normalizeNarrativeField(parsed.explanation, "Unable to analyze this change.", 420),
+    legalImplication: normalizeNarrativeField(
+      parsed.legalImplication,
+      "Review with legal counsel recommended.",
+      520
+    ),
+    recommendation: normalizeNarrativeField(
+      parsed.recommendation,
+      "Consult with legal team before accepting.",
+      520
+    )
+  };
+}
+
+function normalizeCategory(value) {
+  const cleaned = sanitizeModelText(typeof value === "string" ? value : "")
+    .replace(/^category\s*[:\-]\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) {
+    return "Other";
+  }
+
+  const canonical = [
+    "Liability",
+    "Payment Terms",
+    "Termination",
+    "IP Rights",
+    "Data Protection",
+    "Indemnification",
+    "Warranty",
+    "Force Majeure",
+    "Non-Compete",
+    "Compliance",
+    "Other"
+  ];
+
+  const exact = canonical.find((entry) => entry.toLowerCase() === cleaned.toLowerCase());
+  if (exact) {
+    return exact;
+  }
+
+  const lower = cleaned.toLowerCase();
+  if (/[.!?]/.test(cleaned) || cleaned.length > 48) {
+    return inferCategory(lower);
+  }
+
+  return inferCategory(lower) || cleaned;
+}
+
+function inferCategory(lowerText) {
+  if (!lowerText) return "Other";
+  if (lowerText.includes("liab")) return "Liability";
+  if (lowerText.includes("payment") || lowerText.includes("wage")) return "Payment Terms";
+  if (lowerText.includes("terminat")) return "Termination";
+  if (lowerText.includes("ip") || lowerText.includes("intellectual property")) return "IP Rights";
+  if (lowerText.includes("data") || lowerText.includes("privacy")) return "Data Protection";
+  if (lowerText.includes("indemn")) return "Indemnification";
+  if (lowerText.includes("warrant")) return "Warranty";
+  if (lowerText.includes("force majeure")) return "Force Majeure";
+  if (lowerText.includes("non-compete") || lowerText.includes("restrictive covenant")) return "Non-Compete";
+  if (lowerText.includes("compliance") || lowerText.includes("monitor") || lowerText.includes("audit")) {
+    return "Compliance";
+  }
+  return "Other";
+}
+
+function normalizeNarrativeField(value, fallback, maxChars) {
+  const cleaned = sanitizeModelText(typeof value === "string" ? value : "");
+  if (!cleaned) {
+    return fallback;
+  }
+
+  const withoutThought = stripReasoningTails(cleaned);
+  const normalizedWhitespace = withoutThought
+    .replace(/\s+/g, " ")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+
+  if (!normalizedWhitespace) {
+    return fallback;
+  }
+
+  return trimToMaxSentence(normalizedWhitespace, maxChars);
+}
+
+function sanitizeModelText(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+
+  const withoutThink = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, " ")
+    .replace(/<\/?think>/gi, " ");
+
+  return withoutThink
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+function stripReasoningTails(text) {
+  const cutMarkers = [
+    /\bwait,\b/i,
+    /\bnow,\s*considering\b/i,
+    /\blet me\b/i,
+    /\bi should\b/i,
+    /\bi need to\b/i,
+    /\bi will\b/i
+  ];
+
+  let bestCut = -1;
+  for (const marker of cutMarkers) {
+    const match = marker.exec(text);
+    if (match && match.index > 0) {
+      if (bestCut === -1 || match.index < bestCut) {
+        bestCut = match.index;
+      }
+    }
+  }
+
+  const trimmed = bestCut > 0 ? text.slice(0, bestCut).trim() : text.trim();
+  return trimmed;
+}
+
+function trimToMaxSentence(text, maxChars) {
+  if (typeof text !== "string" || text.length <= maxChars) {
+    return text;
+  }
+
+  const candidate = text.slice(0, maxChars).trim();
+  const sentenceBoundary = Math.max(
+    candidate.lastIndexOf("."),
+    candidate.lastIndexOf("!"),
+    candidate.lastIndexOf("?")
+  );
+
+  if (sentenceBoundary >= Math.floor(maxChars * 0.55)) {
+    return candidate.slice(0, sentenceBoundary + 1).trim();
+  }
+
+  const wordBoundary = candidate.lastIndexOf(" ");
+  if (wordBoundary > 0) {
+    return `${candidate.slice(0, wordBoundary).trim()}...`;
+  }
+  return `${candidate}...`;
 }
 
 function resolveEndpoint() {

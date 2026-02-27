@@ -129,13 +129,18 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
     return {
       differenceId: difference.id,
       riskLevel: normalizeRiskLevel(parsed.riskLevel),
-      category: stringOrFallback(parsed.category, 'Other'),
-      explanation: stringOrFallback(parsed.explanation, 'Unable to analyze this change.'),
-      legalImplication: stringOrFallback(
+      category: normalizeRiskCategory(parsed.category),
+      explanation: normalizeRiskNarrative(parsed.explanation, 'Unable to analyze this change.', 420),
+      legalImplication: normalizeRiskNarrative(
         parsed.legalImplication,
-        'Review with legal counsel recommended.'
+        'Review with legal counsel recommended.',
+        520
       ),
-      recommendation: stringOrFallback(parsed.recommendation, 'Consult with legal team before accepting.'),
+      recommendation: normalizeRiskNarrative(
+        parsed.recommendation,
+        'Consult with legal team before accepting.',
+        520
+      ),
       analyzedAt: new Date(),
       status: 'ok',
     };
@@ -843,6 +848,82 @@ function clamp01(value: number): number {
 
 function stringOrFallback(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function normalizeRiskCategory(value: unknown): string {
+  const cleaned = sanitizeRiskText(value).replace(/^category\s*[:\-]\s*/i, '');
+  if (!cleaned || cleaned.length > 48 || /[.!?]/.test(cleaned)) {
+    return inferRiskCategory(cleaned.toLowerCase());
+  }
+  return cleaned;
+}
+
+function inferRiskCategory(value: string): string {
+  if (!value) return 'Other';
+  if (value.includes('liab')) return 'Liability';
+  if (value.includes('payment') || value.includes('wage')) return 'Payment Terms';
+  if (value.includes('terminat')) return 'Termination';
+  if (value.includes('ip') || value.includes('intellectual property')) return 'IP Rights';
+  if (value.includes('data') || value.includes('privacy')) return 'Data Protection';
+  if (value.includes('indemn')) return 'Indemnification';
+  if (value.includes('warrant')) return 'Warranty';
+  if (value.includes('force majeure')) return 'Force Majeure';
+  if (value.includes('non-compete') || value.includes('restrictive covenant')) return 'Non-Compete';
+  if (value.includes('compliance') || value.includes('monitor') || value.includes('audit')) return 'Compliance';
+  return 'Other';
+}
+
+function normalizeRiskNarrative(value: unknown, fallback: string, maxChars: number): string {
+  const cleaned = sanitizeRiskText(value);
+  if (!cleaned) {
+    return fallback;
+  }
+
+  const clipped = trimRiskReasoningTail(cleaned);
+  if (!clipped) {
+    return fallback;
+  }
+
+  return trimToRiskLength(clipped, maxChars);
+}
+
+function sanitizeRiskText(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value
+    .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+    .replace(/<\/?think>/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function trimRiskReasoningTail(value: string): string {
+  const marker = /\b(wait,|now,\s*considering|let me|i should|i need to|i will)\b/i.exec(value);
+  if (marker && marker.index > 0) {
+    return value.slice(0, marker.index).trim();
+  }
+  return value.trim();
+}
+
+function trimToRiskLength(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  const sample = value.slice(0, maxChars).trim();
+  const sentenceBoundary = Math.max(sample.lastIndexOf('.'), sample.lastIndexOf('!'), sample.lastIndexOf('?'));
+  if (sentenceBoundary >= Math.floor(maxChars * 0.55)) {
+    return sample.slice(0, sentenceBoundary + 1).trim();
+  }
+
+  const lastSpace = sample.lastIndexOf(' ');
+  if (lastSpace > 0) {
+    return `${sample.slice(0, lastSpace).trim()}...`;
+  }
+
+  return `${sample}...`;
 }
 
 function parseRiskResponse(raw: string): Record<string, unknown> {

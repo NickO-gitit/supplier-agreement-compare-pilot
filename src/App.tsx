@@ -16,6 +16,7 @@ import {
 } from './services/riskAnalysis';
 import {
   saveComparison,
+  getComparisons,
   getAPIConfig,
   saveAPIConfig,
   saveNote,
@@ -337,6 +338,122 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  const maskSecret = (value?: string) => {
+    if (!value) return '';
+    if (value.length <= 8) return '********';
+    return `${value.slice(0, 4)}...${value.slice(-4)}`;
+  };
+
+  const handleExportVerboseLog = () => {
+    const now = new Date();
+    const storedComparisons = getComparisons();
+    const latestComparison = storedComparisons[0];
+
+    const payload = {
+      generatedAt: now.toISOString(),
+      appState,
+      browser: {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        url: window.location.href,
+      },
+      apiConfiguration: apiConfig
+        ? {
+            provider: apiConfig.isAzure ? 'azure' : 'openai',
+            hasApiKey: !!apiConfig.apiKey,
+            apiKeyMasked: maskSecret(apiConfig.apiKey),
+            endpoint: apiConfig.endpoint || null,
+            deploymentName: apiConfig.deploymentName || null,
+            model: apiConfig.model || null,
+          }
+        : null,
+      currentSession: {
+        comparisonId,
+        selectedDiffId,
+        originalDocument: originalDocument
+          ? {
+              id: originalDocument.id,
+              name: originalDocument.name,
+              fileType: originalDocument.fileType,
+              textLength: originalDocument.text.length,
+              uploadedAt: originalDocument.uploadedAt?.toISOString?.() || String(originalDocument.uploadedAt),
+            }
+          : null,
+        proposedDocument: proposedDocument
+          ? {
+              id: proposedDocument.id,
+              name: proposedDocument.name,
+              fileType: proposedDocument.fileType,
+              textLength: proposedDocument.text.length,
+              uploadedAt: proposedDocument.uploadedAt?.toISOString?.() || String(proposedDocument.uploadedAt),
+            }
+          : null,
+        differencesCount: differences.length,
+        riskAnalysesCount: riskAnalyses.length,
+        groupingReviewsCount: groupingReviews.length,
+        groupingActionLogsCount: groupingActionLogs.length,
+        notesCount: notes.length,
+        isAnalyzing,
+        analysisProgress,
+        isReviewingGrouping,
+        groupingReviewProgress,
+      },
+      currentData: {
+        differences,
+        riskAnalyses: riskAnalyses.map((risk) => ({
+          ...risk,
+          analyzedAt: risk.analyzedAt?.toISOString?.() || String(risk.analyzedAt),
+        })),
+        groupingReviews: groupingReviews.map((review) => ({
+          ...review,
+          reviewedAt: review.reviewedAt?.toISOString?.() || String(review.reviewedAt),
+        })),
+        groupingActionLogs: groupingActionLogs.map((log) => ({
+          ...log,
+          runAt: log.runAt?.toISOString?.() || String(log.runAt),
+        })),
+        notes: notes.map((note) => ({
+          ...note,
+          createdAt: note.createdAt?.toISOString?.() || String(note.createdAt),
+          updatedAt: note.updatedAt?.toISOString?.() || String(note.updatedAt),
+        })),
+      },
+      storageSummary: {
+        storedComparisonsCount: storedComparisons.length,
+        latestStoredComparison: latestComparison
+          ? {
+              id: latestComparison.id,
+              createdAt:
+                latestComparison.createdAt?.toISOString?.() || String(latestComparison.createdAt),
+              status: latestComparison.status,
+              differencesCount: latestComparison.differences?.length || 0,
+              riskAnalysesCount: latestComparison.riskAnalyses?.length || 0,
+              groupingReviewsCount: latestComparison.groupingReviews?.length || 0,
+              groupingActionLogsCount: latestComparison.groupingActionLogs?.length || 0,
+              notesCount: latestComparison.notes?.length || 0,
+            }
+          : null,
+      },
+    };
+
+    const lines: string[] = [
+      'SUPPLIER AGREEMENT COMPARE - VERBOSE LOG',
+      '========================================',
+      `Generated: ${now.toISOString()}`,
+      '',
+      JSON.stringify(payload, null, 2),
+      '',
+    ];
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agreement-verbose-log-${now.toISOString().replace(/[:.]/g, '-')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const generateReport = () => {
     const lines: string[] = [
       '═══════════════════════════════════════════════════════════════════',
@@ -641,6 +758,7 @@ function App() {
         isOpen={showConfigModal}
         onClose={() => setShowConfigModal(false)}
         onSave={handleSaveAPIConfig}
+        onExportVerboseLog={handleExportVerboseLog}
         currentConfig={apiConfig}
       />
     </div>
