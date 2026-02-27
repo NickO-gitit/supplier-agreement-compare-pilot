@@ -130,3 +130,70 @@ jobs:
         run: |
           echo "Deployment complete"
           echo "App URL: ${{ steps.deploy.outputs.containerAppUrl }}"
+
+      - name: Enforce Entra Authentication
+        shell: bash
+        run: |
+          APP_NAME="${{ env.ENVIRONMENT_NAME }}-app"
+          AUTH_TENANT_ID="${{ vars.ENTRA_AUTH_TENANT_ID }}"
+          if [[ -z "$AUTH_TENANT_ID" ]]; then
+            AUTH_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}"
+          fi
+
+          if [[ -z "${{ vars.ENTRA_LOGIN_CLIENT_ID }}" ]]; then
+            echo "Missing required repository variable: ENTRA_LOGIN_CLIENT_ID"
+            exit 1
+          fi
+
+          if [[ -z "${{ secrets.ENTRA_LOGIN_CLIENT_SECRET }}" ]]; then
+            echo "Missing required repository secret: ENTRA_LOGIN_CLIENT_SECRET"
+            exit 1
+          fi
+
+          if [[ -z "$AUTH_TENANT_ID" ]]; then
+            echo "Missing tenant id for auth. Set ENTRA_AUTH_TENANT_ID variable or AZURE_TENANT_ID secret."
+            exit 1
+          fi
+
+          FQDN=$(az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn \
+            -o tsv)
+
+          echo "Applying Entra auth policy to $APP_NAME"
+          az containerapp auth microsoft update \
+            --name "$APP_NAME" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --client-id "${{ vars.ENTRA_LOGIN_CLIENT_ID }}" \
+            --client-secret "${{ secrets.ENTRA_LOGIN_CLIENT_SECRET }}" \
+            --tenant-id "$AUTH_TENANT_ID" \
+            --yes \
+            --output none
+
+          az containerapp auth update \
+            --name "$APP_NAME" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --enabled true \
+            --unauthenticated-client-action RedirectToLoginPage \
+            --excluded-paths /health \
+            --yes \
+            --output none
+
+          ACTIVE_REVISION=$(az containerapp revision list \
+            --name "$APP_NAME" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query "[?properties.active].name | [0]" \
+            -o tsv)
+
+          if [[ -n "$ACTIVE_REVISION" ]]; then
+            az containerapp revision restart \
+              --name "$APP_NAME" \
+              --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+              --revision "$ACTIVE_REVISION" \
+              --output none
+          fi
+
+          echo "Entra auth enforced."
+          echo "Verify redirect URI exists in login app registration:"
+          echo "https://$FQDN/.auth/login/aad/callback"
