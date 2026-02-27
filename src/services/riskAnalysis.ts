@@ -469,51 +469,86 @@ async function callRiskProxy(difference: Difference): Promise<RiskAnalysisCallRe
     throw new Error('Risk proxy is not configured.');
   }
 
-  const response = await fetch(riskProxyUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ difference }),
-  });
+  const maxAttempts = 3;
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Risk proxy error: ${error}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(riskProxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ difference }),
+      });
+
+      if (!response.ok) {
+        const detail = await readProxyErrorDetail(response);
+        const statusText = response.statusText?.trim() || 'Unknown status';
+        const message = `Risk proxy error (${response.status} ${statusText}): ${detail}`;
+
+        if (shouldRetryProxyStatus(response.status) && attempt < maxAttempts) {
+          lastError = new Error(message);
+          await sleep(250 * attempt);
+          continue;
+        }
+
+        throw new Error(message);
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error('Risk proxy returned invalid JSON response.');
+      }
+
+      if (!data || typeof data !== 'object') {
+        throw new Error('Risk proxy returned invalid response.');
+      }
+
+      const record = data as Record<string, unknown>;
+      const rawTrace =
+        record.analysisTrace && typeof record.analysisTrace === 'object'
+          ? (record.analysisTrace as Record<string, unknown>)
+          : null;
+
+      const promptFallback = buildRiskPrompt(difference);
+      const trace: NonNullable<RiskAnalysis['analysisTrace']> = {
+        provider: 'proxy',
+        prompt:
+          rawTrace && typeof rawTrace.prompt === 'string' && rawTrace.prompt.trim().length > 0
+            ? rawTrace.prompt
+            : promptFallback,
+        rawResponse:
+          rawTrace && typeof rawTrace.rawResponse === 'string' ? rawTrace.rawResponse : '',
+        route: rawTrace && typeof rawTrace.route === 'string' ? rawTrace.route : riskProxyUrl,
+        model: rawTrace && typeof rawTrace.model === 'string' ? rawTrace.model : undefined,
+        timestamp:
+          rawTrace && typeof rawTrace.timestamp === 'string'
+            ? rawTrace.timestamp
+            : new Date().toISOString(),
+      };
+
+      return {
+        parsed: record,
+        trace,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown risk proxy error';
+      const wrapped = error instanceof Error ? error : new Error(message);
+
+      if (attempt < maxAttempts && shouldRetryProxyError(message)) {
+        lastError = wrapped;
+        await sleep(250 * attempt);
+        continue;
+      }
+
+      throw wrapped;
+    }
   }
 
-  const data = await response.json();
-  if (!data || typeof data !== 'object') {
-    throw new Error('Risk proxy returned invalid response.');
-  }
-
-  const record = data as Record<string, unknown>;
-  const rawTrace =
-    record.analysisTrace && typeof record.analysisTrace === 'object'
-      ? (record.analysisTrace as Record<string, unknown>)
-      : null;
-
-  const promptFallback = buildRiskPrompt(difference);
-  const trace: NonNullable<RiskAnalysis['analysisTrace']> = {
-    provider: 'proxy',
-    prompt:
-      rawTrace && typeof rawTrace.prompt === 'string' && rawTrace.prompt.trim().length > 0
-        ? rawTrace.prompt
-        : promptFallback,
-    rawResponse:
-      rawTrace && typeof rawTrace.rawResponse === 'string' ? rawTrace.rawResponse : '',
-    route: rawTrace && typeof rawTrace.route === 'string' ? rawTrace.route : riskProxyUrl,
-    model: rawTrace && typeof rawTrace.model === 'string' ? rawTrace.model : undefined,
-    timestamp:
-      rawTrace && typeof rawTrace.timestamp === 'string'
-        ? rawTrace.timestamp
-        : new Date().toISOString(),
-  };
-
-  return {
-    parsed: record,
-    trace,
-  };
+  throw lastError || new Error('Risk proxy error: request failed after retries.');
 }
 
 async function callRiskFollowupProxy(
@@ -578,6 +613,42 @@ async function callGroupingReviewProxy(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readProxyErrorDetail(response: Response): Promise<string> {
+  const text = (await response.text()).trim();
+  if (!text) {
+    return '[empty response body]';
+  }
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const direct = typeof parsed.error === 'string' ? parsed.error : '';
+    const nested =
+      parsed.error && typeof parsed.error === 'object'
+        ? String((parsed.error as Record<string, unknown>).message || '')
+        : '';
+    const message = typeof parsed.message === 'string' ? parsed.message : '';
+    return (direct || nested || message || text).trim();
+  } catch {
+    return text;
+  }
+}
+
+function shouldRetryProxyStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+}
+
+function shouldRetryProxyError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('failed to fetch') ||
+    normalized.includes('networkerror') ||
+    normalized.includes('network error') ||
+    normalized.includes('timeout') ||
+    normalized.includes('timed out') ||
+    normalized.includes('load failed')
+  );
 }
 
 function normalizeRiskLevel(value: unknown): 'low' | 'medium' | 'high' {
