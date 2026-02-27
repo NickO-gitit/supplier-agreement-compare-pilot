@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle, AlertCircle, Loader2, Shield, Zap, Settings, MessageSquare, ArrowDownUp, RefreshCw, Download, StickyNote, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, AlertCircle, Loader2, Shield, Zap, Settings, MessageSquare, ArrowDownUp, RefreshCw, Download, StickyNote, X, FileText } from 'lucide-react';
 import type { Difference, RiskAnalysis, Note } from '../types';
 import { askRiskFollowUp } from '../services/riskAnalysis';
 import { NotesPanel } from './NotesPanel';
@@ -7,11 +7,13 @@ import { NotesPanel } from './NotesPanel';
 interface RiskAnalysisPanelProps {
   differences: Difference[];
   riskAnalyses: RiskAnalysis[];
+  expandingRiskById: Record<string, boolean>;
   notes: Note[];
   selectedDiffId: string | null;
   isAnalyzing: boolean;
   analysisProgress: { completed: number; total: number };
   onAnalyze: () => void;
+  onExpandRisk: (differenceId: string) => Promise<void>;
   isConfigured: boolean;
   onConfigure: () => void;
   onOpenSettings: () => void;
@@ -27,11 +29,13 @@ interface RiskAnalysisPanelProps {
 export function RiskAnalysisPanel({
   differences,
   riskAnalyses,
+  expandingRiskById,
   notes,
   selectedDiffId,
   isAnalyzing,
   analysisProgress,
   onAnalyze,
+  onExpandRisk,
   isConfigured,
   onConfigure,
   onOpenSettings,
@@ -103,6 +107,8 @@ export function RiskAnalysisPanel({
     ? differences.find((d) => d.id === selectedDiffId) || null
     : null;
   const selectedIsError = selectedRisk?.status === 'error';
+  const selectedIsExpanded = selectedRisk?.analysisDetailLevel === 'expanded';
+  const selectedIsExpanding = selectedDiffId ? !!expandingRiskById[selectedDiffId] : false;
   const selectedFollowUps =
     selectedDiffId && followUpByDifference[selectedDiffId]
       ? followUpByDifference[selectedDiffId]
@@ -432,6 +438,24 @@ export function RiskAnalysisPanel({
               >
                 {selectedCategory}
               </span>
+              {selectedIsExpanded && (
+                <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-medium">
+                  Expanded
+                </span>
+              )}
+              <button
+                onClick={() => onExpandRisk(selectedRisk.differenceId)}
+                disabled={selectedIsExpanding}
+                className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-white/80 text-slate-700 rounded-lg border border-slate-200 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Re-run this risk with expanded detail"
+              >
+                {selectedIsExpanding ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <FileText className="w-3.5 h-3.5" />
+                )}
+                {selectedIsExpanding ? 'Expanding...' : 'Expanded Analysis'}
+              </button>
             </div>
 
             <div className="space-y-4">
@@ -518,6 +542,8 @@ export function RiskAnalysisPanel({
             const isError = risk.status === 'error';
             const selected = selectedDiffId === risk.differenceId;
             const noteCount = notesByDifference[risk.differenceId] || 0;
+            const isExpanded = risk.analysisDetailLevel === 'expanded';
+            const isExpanding = !!expandingRiskById[risk.differenceId];
             const displayCategory = sanitizeCategory(risk.category);
             const displayExplanation = sanitizeDisplayText(risk.explanation);
             return (
@@ -539,6 +565,27 @@ export function RiskAnalysisPanel({
                   >
                     {displayCategory}
                   </span>
+                  {isExpanded && (
+                    <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-medium">
+                      Expanded
+                    </span>
+                  )}
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onExpandRisk(risk.differenceId);
+                    }}
+                    disabled={isExpanding}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium bg-white/80 text-slate-700 rounded-lg border border-slate-200 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Re-run this risk with expanded detail"
+                  >
+                    {isExpanding ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <FileText className="w-3 h-3" />
+                    )}
+                    {isExpanding ? '...' : 'Expand'}
+                  </button>
                   <button
                     onClick={(event) => {
                       event.stopPropagation();

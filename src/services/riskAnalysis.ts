@@ -19,6 +19,26 @@ Respond in this exact JSON format:
   "recommendation": "<1-2 sentences on recommended action>"
 }`;
 
+const RISK_ANALYSIS_EXPANDED_PROMPT = `You are a legal expert analyzing changes to a supplier framework agreement.
+Analyze the following change and provide a risk assessment for the CUSTOMER (not the supplier).
+
+IMPORTANT: Provide a fuller analysis than the standard mode. Include meaningful legal and business context.
+IMPORTANT: Keep the output practical and decision-oriented; avoid internal reasoning.
+
+Change Type: {changeType}
+Original Text: {originalText}
+Proposed Text: {proposedText}
+Context: {context}
+
+Respond in this exact JSON format:
+{
+  "riskLevel": "low" | "medium" | "high",
+  "category": "<category name: e.g., Liability, Payment Terms, Termination, IP Rights, Data Protection, Indemnification, Warranty, Force Majeure, Non-Compete, Other>",
+  "explanation": "<3-6 sentences explaining what changed and why it matters>",
+  "legalImplication": "<3-6 sentences on legal/commercial impact for the customer>",
+  "recommendation": "<3-6 sentences with actionable next steps and fallback language suggestions>"
+}`;
+
 const GROUPING_REVIEW_PROMPT = `You are a contract diff quality reviewer.
 Your task is to judge whether ONE detected change appears grouped correctly in legal-document context.
 
@@ -115,6 +135,10 @@ interface RiskAnalysisCallResult {
   trace: NonNullable<RiskAnalysis['analysisTrace']>;
 }
 
+interface RiskAnalysisOptions {
+  detailLevel?: 'standard' | 'expanded';
+}
+
 let config: OpenAIConfig | null = null;
 
 export function configureRiskAnalysis(newConfig: OpenAIConfig) {
@@ -125,31 +149,43 @@ export function isConfigured(): boolean {
   return hasRiskProxyConfigured() || (config !== null && !!config.apiKey);
 }
 
-export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis> {
+export async function analyzeRisk(
+  difference: Difference,
+  options?: RiskAnalysisOptions
+): Promise<RiskAnalysis> {
+  const detailLevel = options?.detailLevel === 'expanded' ? 'expanded' : 'standard';
   let trace: RiskAnalysis['analysisTrace'];
 
   try {
     const result = hasRiskProxyConfigured()
-      ? await callRiskProxy(difference)
-      : await analyzeWithDirectApi(difference);
+      ? await callRiskProxy(difference, detailLevel)
+      : await analyzeWithDirectApi(difference, detailLevel);
     const parsed = result.parsed;
     trace = result.trace;
+    const maxExplanation = detailLevel === 'expanded' ? 1150 : 420;
+    const maxLegalImplication = detailLevel === 'expanded' ? 1400 : 520;
+    const maxRecommendation = detailLevel === 'expanded' ? 1400 : 520;
 
     return {
       differenceId: difference.id,
       riskLevel: normalizeRiskLevel(parsed.riskLevel),
       category: normalizeRiskCategory(parsed.category),
-      explanation: normalizeRiskNarrative(parsed.explanation, 'Unable to analyze this change.', 420),
+      explanation: normalizeRiskNarrative(
+        parsed.explanation,
+        'Unable to analyze this change.',
+        maxExplanation
+      ),
       legalImplication: normalizeRiskNarrative(
         parsed.legalImplication,
         'Review with legal counsel recommended.',
-        520
+        maxLegalImplication
       ),
       recommendation: normalizeRiskNarrative(
         parsed.recommendation,
         'Consult with legal team before accepting.',
-        520
+        maxRecommendation
       ),
+      analysisDetailLevel: detailLevel,
       analysisTrace: trace,
       analyzedAt: new Date(),
       status: 'ok',
@@ -163,6 +199,7 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
       explanation: 'Failed to analyze this change automatically.',
       legalImplication: 'Manual review required.',
       recommendation: 'Please review this change manually with your legal team.',
+      analysisDetailLevel: detailLevel,
       analysisTrace: trace,
       analyzedAt: new Date(),
       status: 'error',
@@ -171,14 +208,21 @@ export async function analyzeRisk(difference: Difference): Promise<RiskAnalysis>
   }
 }
 
-async function analyzeWithDirectApi(difference: Difference): Promise<RiskAnalysisCallResult> {
+export async function analyzeRiskExpanded(difference: Difference): Promise<RiskAnalysis> {
+  return analyzeRisk(difference, { detailLevel: 'expanded' });
+}
+
+async function analyzeWithDirectApi(
+  difference: Difference,
+  detailLevel: 'standard' | 'expanded'
+): Promise<RiskAnalysisCallResult> {
   if (!config || !config.apiKey) {
     throw new Error('Risk analysis not configured. Please provide API key.');
   }
 
-  const prompt = buildRiskPrompt(difference);
+  const prompt = buildRiskPrompt(difference, detailLevel);
 
-  const response = await callOpenAIJson(prompt);
+  const response = await callOpenAIJson(prompt, detailLevel === 'expanded' ? 1100 : 500);
   return {
     parsed: parseRiskResponse(response),
     trace: {
@@ -191,8 +235,13 @@ async function analyzeWithDirectApi(difference: Difference): Promise<RiskAnalysi
   };
 }
 
-function buildRiskPrompt(difference: Difference): string {
-  return RISK_ANALYSIS_PROMPT
+function buildRiskPrompt(
+  difference: Difference,
+  detailLevel: 'standard' | 'expanded'
+): string {
+  const template =
+    detailLevel === 'expanded' ? RISK_ANALYSIS_EXPANDED_PROMPT : RISK_ANALYSIS_PROMPT;
+  return template
     .replace('{changeType}', difference.type)
     .replace('{originalText}', difference.originalText || '[None - New Addition]')
     .replace('{proposedText}', difference.proposedText || '[None - Deleted]')
@@ -375,7 +424,7 @@ async function analyzeGroupingWithDirectApi(
   return parseRiskResponse(response);
 }
 
-async function callOpenAIJson(prompt: string): Promise<string> {
+async function callOpenAIJson(prompt: string, maxTokens = 500): Promise<string> {
   return callOpenAIWithMessages(
     [
       {
@@ -388,7 +437,7 @@ async function callOpenAIJson(prompt: string): Promise<string> {
         content: prompt,
       },
     ],
-    { temperature: 0.3, maxTokens: 500, expectJson: true }
+    { temperature: 0.3, maxTokens, expectJson: true }
   );
 }
 
@@ -463,7 +512,10 @@ async function callOpenAIWithMessages(
   return content;
 }
 
-async function callRiskProxy(difference: Difference): Promise<RiskAnalysisCallResult> {
+async function callRiskProxy(
+  difference: Difference,
+  detailLevel: 'standard' | 'expanded'
+): Promise<RiskAnalysisCallResult> {
   const riskProxyUrl = getRiskProxyUrl();
   if (!riskProxyUrl) {
     throw new Error('Risk proxy is not configured.');
@@ -479,7 +531,7 @@ async function callRiskProxy(difference: Difference): Promise<RiskAnalysisCallRe
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ difference }),
+        body: JSON.stringify({ difference, analysisMode: detailLevel }),
       });
 
       if (!response.ok) {
@@ -513,7 +565,7 @@ async function callRiskProxy(difference: Difference): Promise<RiskAnalysisCallRe
           ? (record.analysisTrace as Record<string, unknown>)
           : null;
 
-      const promptFallback = buildRiskPrompt(difference);
+      const promptFallback = buildRiskPrompt(difference, detailLevel);
       const trace: NonNullable<RiskAnalysis['analysisTrace']> = {
         provider: 'proxy',
         prompt:

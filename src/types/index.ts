@@ -24,6 +24,7 @@ export interface RiskAnalysis {
   explanation: string;
   legalImplication: string;
   recommendation: string;
+  analysisDetailLevel?: 'standard' | 'expanded';
   analysisTrace?: {
     provider: 'proxy' | 'direct';
     prompt: string;

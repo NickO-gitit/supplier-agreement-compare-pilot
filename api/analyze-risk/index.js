@@ -24,6 +24,29 @@ Respond in this exact JSON format:
   "recommendation": "<1-2 sentences on recommended action>"
 }`;
 
+const RISK_ANALYSIS_EXPANDED_PROMPT = `You are a legal expert analyzing changes to a supplier framework agreement.
+Analyze the following change and provide a risk assessment for the CUSTOMER (not the supplier).
+
+IMPORTANT: Provide a fuller analysis than standard mode. Include practical legal and commercial context.
+IMPORTANT OUTPUT RULES:
+- Return VALID JSON only.
+- Do NOT include chain-of-thought, self-talk, internal reasoning, or <think> tags.
+- Do NOT include markdown, code fences, or extra keys.
+
+Change Type: {changeType}
+Original Text: {originalText}
+Proposed Text: {proposedText}
+Context: {context}
+
+Respond in this exact JSON format:
+{
+  "riskLevel": "low" | "medium" | "high",
+  "category": "<category name: e.g., Liability, Payment Terms, Termination, IP Rights, Data Protection, Indemnification, Warranty, Force Majeure, Non-Compete, Other>",
+  "explanation": "<3-6 sentences explaining what changed and why it matters>",
+  "legalImplication": "<3-6 sentences on legal/commercial impact for the customer>",
+  "recommendation": "<3-6 sentences with actionable next steps and fallback language suggestions>"
+}`;
+
 module.exports = async function (context, req) {
   try {
     const endpoint = resolveEndpoint();
@@ -43,6 +66,7 @@ module.exports = async function (context, req) {
 
     const requestBody = parseRequestBody(req.body);
     const difference = requestBody.difference;
+    const analysisMode = requestBody.analysisMode === "expanded" ? "expanded" : "standard";
 
     if (!difference || typeof difference !== "object") {
       context.res = {
@@ -53,7 +77,10 @@ module.exports = async function (context, req) {
       return;
     }
 
-    const prompt = RISK_ANALYSIS_PROMPT
+    const promptTemplate =
+      analysisMode === "expanded" ? RISK_ANALYSIS_EXPANDED_PROMPT : RISK_ANALYSIS_PROMPT;
+
+    const prompt = promptTemplate
       .replace("{changeType}", difference.type || "modification")
       .replace("{originalText}", difference.originalText || "[None - New Addition]")
       .replace("{proposedText}", difference.proposedText || "[None - Deleted]")
@@ -77,12 +104,12 @@ module.exports = async function (context, req) {
           }
         ],
         temperature: 0.3,
-        max_tokens: 700
+        max_tokens: analysisMode === "expanded" ? 1200 : 700
       }
     });
     const rawContent = extractModelText(data);
     const parsed = parseRiskResponse(rawContent);
-    const normalized = normalizeParsedRisk(parsed);
+    const normalized = normalizeParsedRisk(parsed, analysisMode);
     const analysisTrace = {
       provider: "proxy",
       prompt,
@@ -97,6 +124,7 @@ module.exports = async function (context, req) {
       headers: { "Content-Type": "application/json" },
       body: {
         ...normalized,
+        analysisDetailLevel: analysisMode,
         analysisTrace
       }
     };
@@ -348,20 +376,29 @@ function stringOrFallback(value, fallback) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function normalizeParsedRisk(parsed) {
+function normalizeParsedRisk(parsed, mode) {
+  const isExpanded = mode === "expanded";
+  const explanationLimit = isExpanded ? 1150 : 420;
+  const legalLimit = isExpanded ? 1400 : 520;
+  const recommendationLimit = isExpanded ? 1400 : 520;
+
   return {
     riskLevel: normalizeRiskLevel(parsed.riskLevel),
     category: normalizeCategory(parsed.category),
-    explanation: normalizeNarrativeField(parsed.explanation, "Unable to analyze this change.", 420),
+    explanation: normalizeNarrativeField(
+      parsed.explanation,
+      "Unable to analyze this change.",
+      explanationLimit
+    ),
     legalImplication: normalizeNarrativeField(
       parsed.legalImplication,
       "Review with legal counsel recommended.",
-      520
+      legalLimit
     ),
     recommendation: normalizeNarrativeField(
       parsed.recommendation,
       "Consult with legal team before accepting.",
-      520
+      recommendationLimit
     )
   };
 }

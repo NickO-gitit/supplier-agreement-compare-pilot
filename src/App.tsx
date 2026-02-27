@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowRight, Loader2, Zap, FileSearch, Shield } from 'lucide-react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -12,6 +12,7 @@ import {
   isGroupingReviewConfigured,
   analyzeAllRisks,
   analyzeAllGroupingReviews,
+  analyzeRiskExpanded,
 } from './services/riskAnalysis';
 import {
   saveComparison,
@@ -48,13 +49,19 @@ function App() {
   const [, setIsComparing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState({ completed: 0, total: 0 });
+  const [isExpandingRiskById, setIsExpandingRiskById] = useState<Record<string, boolean>>({});
   const [isReviewingGrouping, setIsReviewingGrouping] = useState(false);
   const [groupingReviewProgress, setGroupingReviewProgress] = useState({ completed: 0, total: 0 });
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showRiskDisclaimer, setShowRiskDisclaimer] = useState(false);
+  const riskAnalysesRef = useRef<RiskAnalysis[]>([]);
 
   const toPersistentRiskAnalyses = (items: RiskAnalysis[]): RiskAnalysis[] =>
     items.map(({ analysisTrace, ...risk }) => risk);
+
+  useEffect(() => {
+    riskAnalysesRef.current = riskAnalyses;
+  }, [riskAnalyses]);
 
   // Perform comparison when both documents are loaded
   const handleCompare = useCallback(async () => {
@@ -64,6 +71,8 @@ function App() {
     setAppState('comparing');
     setShowRiskDisclaimer(false);
     setRiskAnalyses([]);
+    setIsExpandingRiskById({});
+    setIsExpandingRiskById({});
 
     // Small delay to show loading state
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -168,6 +177,64 @@ function App() {
     groupingActionLogs,
     notes,
   ]);
+
+  const handleExpandRisk = useCallback(
+    async (differenceId: string) => {
+      const difference = differences.find((entry) => entry.id === differenceId);
+      if (!difference) {
+        return;
+      }
+
+      setIsExpandingRiskById((previous) => ({ ...previous, [differenceId]: true }));
+      try {
+        const expandedAnalysis = await analyzeRiskExpanded(difference);
+        const existing = riskAnalysesRef.current;
+        const currentIndex = existing.findIndex((entry) => entry.differenceId === differenceId);
+        if (
+          expandedAnalysis.status === 'error' &&
+          currentIndex >= 0 &&
+          existing[currentIndex].status !== 'error'
+        ) {
+          return;
+        }
+        const nextAnalyses =
+          currentIndex >= 0
+            ? existing.map((entry, index) => (index === currentIndex ? expandedAnalysis : entry))
+            : [...existing, expandedAnalysis];
+
+        setRiskAnalyses(nextAnalyses);
+
+        if (comparisonId) {
+          const comparison: Comparison = {
+            id: comparisonId,
+            originalDocument,
+            proposedDocument,
+            differences,
+            riskAnalyses: toPersistentRiskAnalyses(nextAnalyses),
+            groupingReviews,
+            groupingActionLogs,
+            notes,
+            createdAt: new Date(),
+            status: 'completed',
+          };
+          saveComparison(comparison);
+        }
+      } catch (error) {
+        console.error('Expanded risk analysis failed:', error);
+      } finally {
+        setIsExpandingRiskById((previous) => ({ ...previous, [differenceId]: false }));
+      }
+    },
+    [
+      comparisonId,
+      differences,
+      groupingActionLogs,
+      groupingReviews,
+      notes,
+      originalDocument,
+      proposedDocument,
+    ]
+  );
 
   // Run grouping review
   const handleReviewGrouping = useCallback(async () => {
@@ -686,11 +753,13 @@ function App() {
                   <RiskAnalysisPanel
                     differences={differences}
                     riskAnalyses={riskAnalyses}
+                    expandingRiskById={isExpandingRiskById}
                     notes={notes}
                     selectedDiffId={selectedDiffId}
                     isAnalyzing={isAnalyzing}
                     analysisProgress={analysisProgress}
                     onAnalyze={handleAnalyzeRisks}
+                    onExpandRisk={handleExpandRisk}
                     isConfigured={isConfigured()}
                     onConfigure={() => setShowConfigModal(true)}
                     onOpenSettings={() => setShowConfigModal(true)}
