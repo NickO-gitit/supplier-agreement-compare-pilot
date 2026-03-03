@@ -26,6 +26,9 @@ env:
   AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
   AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
   ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
 jobs:
   # ────────────────────────────────────────────────────────────
@@ -45,12 +48,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate OIDC variables
+        shell: bash
+        run: |
+          for required in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            if [[ -z "${!required}" ]]; then
+              echo "Missing required repository variable: $required"
+              exit 1
+            fi
+          done
+
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Derive ACR name automatically
         id: naming
@@ -116,13 +129,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate OIDC variables
+        shell: bash
+        run: |
+          for required in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            if [[ -z "${!required}" ]]; then
+              echo "Missing required repository variable: $required"
+              exit 1
+            fi
+          done
+
       # ── Azure Login via OIDC (no stored credentials!) ───────
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Find infrastructure folder
         id: infra
@@ -198,7 +221,7 @@ jobs:
         id: deploy
         uses: azure/arm-deploy@v2
         with:
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: ${{ steps.infra.outputs.infra_dir }}/main.bicep
           parameters: >
@@ -224,6 +247,43 @@ jobs:
         run: |
           echo "✅ Deployment complete!"
           echo "🌍 App URL: ${{ steps.deploy.outputs.containerAppUrl }}"
+
+      - name: Enforce Entra Authentication
+        shell: bash
+        run: |
+          APP_NAME="${{ env.ENVIRONMENT_NAME }}-app"
+          AUTH_TENANT_ID="${{ vars.ENTRA_AUTH_TENANT_ID }}"
+          if [[ -z "$AUTH_TENANT_ID" ]]; then
+            AUTH_TENANT_ID="${{ env.AZURE_TENANT_ID }}"
+          fi
+
+          if [[ -z "${{ vars.ENTRA_LOGIN_CLIENT_ID }}" ]]; then
+            echo "Missing required repository variable: ENTRA_LOGIN_CLIENT_ID"
+            exit 1
+          fi
+
+          if [[ -z "${{ secrets.ENTRA_LOGIN_CLIENT_SECRET }}" ]]; then
+            echo "Missing required repository secret: ENTRA_LOGIN_CLIENT_SECRET"
+            exit 1
+          fi
+
+          az containerapp auth microsoft update \
+            --name "$APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --client-id "${{ vars.ENTRA_LOGIN_CLIENT_ID }}" \
+            --client-secret "${{ secrets.ENTRA_LOGIN_CLIENT_SECRET }}" \
+            --tenant-id "$AUTH_TENANT_ID" \
+            --yes \
+            --output none
+
+          az containerapp auth update \
+            --name "$APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --enabled true \
+            --unauthenticated-client-action RedirectToLoginPage \
+            --excluded-paths /health \
+            --yes \
+            --output none
 
       # ── Update Container App image (idempotent fast path) ────
       # This is a fast update when only the image changes – no full Bicep run needed.

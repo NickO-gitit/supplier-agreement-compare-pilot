@@ -1,0 +1,211 @@
+SUPPLIER AGREEMENT COMPARE
+AZURE CONTAINER APPS + FOUNDRY SETUP GUIDE
+(Updated with all clarifications)
+
+============================================================
+
+REPO + WORKFLOW
+============================================================
+Pull latest code:
+git pull
+
+Active deployment workflow:
+.github/workflows/deploy-container-apps.yml
+
+Static Web Apps workflow is manual-only now (not auto on push).
+
+============================================================
+2) AZURE APP REGISTRATION (OIDC FOR GITHUB ACTIONS)
+Azure Portal:
+Entra ID -> App registrations -> New registration
+
+Save these values:
+
+Application (client) ID -> AZURE_CLIENT_ID
+Directory (tenant) ID -> AZURE_TENANT_ID
+Subscription ID -> AZURE_SUBSCRIPTION_ID
+============================================================
+3) FEDERATED CREDENTIAL (IMPORTANT)
+App Registration:
+Certificates & secrets -> Federated credentials -> Add
+
+Use:
+
+Entity type: Branch
+Organization: NickO-gitit
+Repository: supplier-agreement-compare
+Branch: main
+Credential details:
+
+Name: github-main-supplier-compare
+Description: any text
+Audience: api://AzureADTokenExchange (default)
+============================================================
+4) RBAC ON RESOURCE GROUP
+Target Resource Group -> Access control (IAM)
+
+Assign these roles to the app registration:
+
+Contributor
+User Access Administrator
+For User Access Administrator -> Conditions step:
+
+Select:
+Allow user to assign all roles except privileged administrator roles
+Owner, UAA, RBAC (Recommended)
+
+Condition: None
+
+============================================================
+5) REGISTER AZURE RESOURCE PROVIDERS
+(fixes MissingSubscriptionRegistration)
+Run in Azure Cloud Shell (Bash):
+
+az account set --subscription "<your-subscription-id>"
+
+az provider register --namespace Microsoft.ContainerRegistry
+az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.ManagedIdentity
+az provider register --namespace Microsoft.Authorization
+az provider register --namespace Microsoft.Sql
+
+Check status:
+
+for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.Sql; do
+echo -n "$ns: "
+az provider show --namespace $ns --query registrationState -o tsv
+done
+
+Wait until all show: Registered
+
+============================================================
+6) GITHUB VARIABLES (REPOSITORY VARIABLES)
+GitHub:
+Repo -> Settings -> Secrets and variables -> Actions -> Variables
+
+Add:
+
+AZURE_CLIENT_ID
+AZURE_TENANT_ID
+AZURE_SUBSCRIPTION_ID
+AZURE_RESOURCE_GROUP = <your-rg-name>
+AZURE_LOCATION = swedencentral (or your region)
+ENVIRONMENT_NAME = suppliercompareprod (example)
+FOUNDRY_ENDPOINT = https://mf-supplier-compare-resource.services.ai.azure.com
+FOUNDRY_PROJECT_ENDPOINT = https://mf-supplier-compare-resource.services.ai.azure.com/api/projects/mf-supplier-compare
+FOUNDRY_DEPLOYMENT = <your-foundry-deployment-name>
+FOUNDRY_API_VERSION = 2024-10-21
+OPENAI_MODEL = gpt-4.1-mini
+ENTRA_LOGIN_CLIENT_ID = <entra-login-app-client-id>
+ENTRA_AUTH_TENANT_ID = <tenant-id> (optional; defaults to AZURE_TENANT_ID)
+============================================================
+7) GITHUB SECRETS (REPOSITORY SECRETS)
+GitHub:
+Repo -> Settings -> Secrets and variables -> Actions -> Secrets
+
+Add:
+FOUNDRY_API_KEY
+ENTRA_LOGIN_CLIENT_SECRET
+OPENAI_API_KEY (optional)
+============================================================
+8) DEPLOY
+GitHub -> Actions -> Deploy to Azure Container Apps -> Run workflow
+
+Keep deploy_sql=false unless you want SQL provisioned.
+============================================================
+9) VERIFY
+After workflow success:
+
+Open App URL from workflow output
+Health check:
+https://<app-url>/health
+Expected:
+{"status":"ok"}
+Then test in UI:
+
+Upload documents
+Run risk analysis
+Run grouping review and follow-up
+============================================================
+10) COMMON ERROR FIXES
+Error: AADSTS700016
+Cause:
+
+AZURE_CLIENT_ID and AZURE_TENANT_ID mismatch
+Fix:
+Re-copy both from the same App Registration Overview page.
+Error: MissingSubscriptionRegistration (Microsoft.ContainerRegistry)
+Cause:
+
+Provider not registered in subscription
+Fix:
+Run provider register commands in step 5.
+============================================================
+
+============================================================
+11) IF DEPLOYMENT FAILS: REGISTER AZURE PROVIDERS
+============================================================
+
+If workflow fails with MissingSubscriptionRegistration, run in Azure Cloud Shell:
+
+  az account set --subscription "<your-subscription-id>"
+
+  az provider register --namespace Microsoft.ContainerRegistry
+  az provider register --namespace Microsoft.App
+  az provider register --namespace Microsoft.OperationalInsights
+  az provider register --namespace Microsoft.ManagedIdentity
+  az provider register --namespace Microsoft.Authorization
+  az provider register --namespace Microsoft.Sql
+
+Check status:
+
+  for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.Sql; do
+    echo -n "$ns: "
+    az provider show --namespace $ns --query registrationState -o tsv
+  done
+
+Wait until all show: Registered
+
+
+============================================================
+12) MAKE APP PRIVATE WITH ENTRA ID (NO PUBLIC ACCESS)
+============================================================
+
+Goal: users must sign in with Entra ID before using the site.
+
+A) Create a separate Entra App Registration for USER LOGIN
+   (Do NOT use the GitHub OIDC deployment app)
+   - Name example: supplier-compare-web-login
+   - Single-tenant
+   - Redirect URI (Web):
+     https://<app-url>/.auth/login/aad/callback
+   - Create client secret and copy its value
+
+B) Configure Container App Authentication
+   - Azure Portal -> Container App (<ENVIRONMENT_NAME>-app) -> Authentication
+   - Add identity provider: Microsoft
+   - Use the login app registration client ID and secret
+   - Issuer/tenant: your tenant (single-tenant)
+   - Set unauthenticated requests to:
+     "Require authentication" (or Return 401)
+
+C) Important for health probe
+   - Exclude path /health from auth (allow anonymous),
+     otherwise liveness checks can fail.
+
+D) Restrict who can access (optional but recommended)
+   - Entra ID -> Enterprise Applications -> your login app
+   - Assign specific users/groups only.
+
+Result:
+- App is no longer publicly usable.
+- Users must authenticate with Entra ID.
+
+
+
+NOTES FROM YOUR CLARIFICATIONS
+You are using Foundry project endpoint (not standard Azure OpenAI endpoint).
+Entity type for federated credential is Branch.
+FOUNDRY_API_VERSION is not a UI field you "find"; it is an API version string.
+Static Web Apps auto-deploy is disabled; Container Apps workflow is primary.

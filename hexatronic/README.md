@@ -17,7 +17,7 @@ When workflow runs, it does this for you:
    - If no database exists, it can create Azure SQL automatically.
 6. Updates app code/image when resources already exist.
 
-No registry password, no Foundry API key, and no hardcoded secrets are required in code files.
+No registry password and no hardcoded secrets are required in code files.
 
 ## This repo integration
 
@@ -31,18 +31,21 @@ This repository now supports Azure Container Apps directly:
 Required GitHub settings:
 
 - Secrets:
-  - `AZURE_CLIENT_ID`
-  - `AZURE_TENANT_ID`
-  - `AZURE_SUBSCRIPTION_ID`
   - `FOUNDRY_API_KEY` (recommended)
+  - `ENTRA_LOGIN_CLIENT_SECRET` (required for enforced Entra auth)
   - `OPENAI_API_KEY` (optional fallback)
 - Variables:
+  - `AZURE_CLIENT_ID` (OIDC app registration client ID)
+  - `AZURE_TENANT_ID` (OIDC app registration tenant ID)
+  - `AZURE_SUBSCRIPTION_ID`
   - `AZURE_RESOURCE_GROUP`
   - `AZURE_LOCATION`
   - `ENVIRONMENT_NAME`
   - `FOUNDRY_PROJECT_ENDPOINT`
   - `FOUNDRY_DEPLOYMENT`
   - `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
+  - `ENTRA_LOGIN_CLIENT_ID` (required for enforced Entra auth)
+  - `ENTRA_AUTH_TENANT_ID` (optional; defaults to `AZURE_TENANT_ID`)
   - `OPENAI_MODEL` (optional; default `gpt-4.1-mini`)
 
 ## Important safety rules
@@ -79,30 +82,35 @@ The workflow supports these infra paths automatically:
 
 Think of this like giving GitHub a "robot key" to your Azure subscription.
 
-### Step 1: Add GitHub Secrets
-
-In your GitHub repo:
-`Settings -> Secrets and variables -> Actions -> Secrets`
-
-Add:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-
-### Step 2: Add GitHub Variables
+### Step 1: Add GitHub Variables (OIDC + deployment settings)
 
 In your GitHub repo:
 `Settings -> Secrets and variables -> Actions -> Variables`
 
 Add:
 
+- `AZURE_CLIENT_ID` (OIDC deployment app/client ID)
+- `AZURE_TENANT_ID` (OIDC deployment tenant ID)
+- `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP` (example: `rg-myapp-prod`)
 - `AZURE_LOCATION` (example: `swedencentral`)
 - `ENVIRONMENT_NAME` (example: `myapp-prod`)
 - `FOUNDRY_PROJECT_ENDPOINT` (example: `https://<resource>.services.ai.azure.com/api/projects/<project>`)
 - `FOUNDRY_DEPLOYMENT` (example: `gpt-4.1-mini`)
 - `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
+- `ENTRA_LOGIN_CLIENT_ID` (app registration client ID used for end-user login)
+- `ENTRA_AUTH_TENANT_ID` (optional, defaults to `AZURE_TENANT_ID`)
+
+### Step 2: Add GitHub Secrets (runtime provider keys only)
+
+In your GitHub repo:
+`Settings -> Secrets and variables -> Actions -> Secrets`
+
+Add:
+
+- `FOUNDRY_API_KEY`
+- `ENTRA_LOGIN_CLIENT_SECRET`
+- `OPENAI_API_KEY` (optional)
 
 You do NOT need to add ACR variable.
 ACR name is generated automatically from `ENVIRONMENT_NAME`.
@@ -126,6 +134,20 @@ Imagine 4 buttons:
    - It prints your app URL.
 
 That’s it.
+
+## Entra auth on every deployment
+
+The workflow `.github/workflows/deploy-container-apps.yml` now enforces Entra login on every deploy:
+
+- Enables Container App auth
+- Configures Microsoft identity provider
+- Sets unauthenticated action to `RedirectToLoginPage`
+- Keeps `/health` excluded for probes
+
+Prerequisite:
+
+- Your login app registration must include this redirect URI:
+  - `https://<container-app-fqdn>/.auth/login/aad/callback`
 
 ## Local deployment (optional)
 
