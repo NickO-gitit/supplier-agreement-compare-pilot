@@ -115,6 +115,7 @@ var prefix = environmentName
 var containerAppEnvName = '${prefix}-cae'
 var containerAppName = '${prefix}-app'
 var logAnalyticsName = '${prefix}-logs'
+var appInsightsName = '${prefix}-appi'
 var sqlServerName = '${prefix}-sql'
 var userIdentityName = '${prefix}-id'
 var acrNameBase = replace(toLower('${prefix}acr'), '-', '')
@@ -177,6 +178,7 @@ module containerAppModule 'containerapps.bicep' = {
     containerAppEnvName: containerAppEnvName
     containerAppName: containerAppName
     logAnalyticsName: logAnalyticsName
+    appInsightsName: appInsightsName
     containerImage: containerImage
     containerRegistryServer: containerRegistry.properties.loginServer
     userIdentityId: userIdentity.id
@@ -204,5 +206,6 @@ module containerAppModule 'containerapps.bicep' = {
 // ── Outputs ───────────────────────────────────────────────────
 output containerAppUrl string = containerAppModule.outputs.containerAppUrl
 output containerAppName string = containerAppName
+output applicationInsightsName string = containerAppModule.outputs.applicationInsightsName
 output managedIdentityClientId string = userIdentity.properties.clientId
 output managedIdentityPrincipalId string = userIdentity.properties.principalId

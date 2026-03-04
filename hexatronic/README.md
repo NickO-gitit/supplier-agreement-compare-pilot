@@ -32,7 +32,6 @@ Required GitHub settings:
 
 - GitHub Environment (recommended per tenant): `customer-a-prod`, `customer-b-prod`, etc.
 - Secrets:
-  - `FOUNDRY_API_KEY` (recommended)
   - `OPENAI_API_KEY` (optional fallback)
 - Variables:
   - `AZURE_CLIENT_ID` (OIDC app registration client ID)
@@ -48,6 +47,7 @@ Required GitHub settings:
   - `ENTRA_AUTH_TENANT_ID` (optional; defaults to `AZURE_TENANT_ID`)
   - `KEY_VAULT_NAME` (required; Key Vault containing Entra login secret)
   - `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional; default `entra-login-client-secret`)
+  - `FOUNDRY_API_KEY_SECRET_NAME` (optional; default `foundry-api-key`)
   - `DEFAULT_GITHUB_ENVIRONMENT` (optional fallback for push-triggered deployments)
   - `OPENAI_MODEL` (optional; default `gpt-4.1-mini`)
 
@@ -117,6 +117,7 @@ Add:
 - `ENTRA_AUTH_TENANT_ID` (optional, defaults to `AZURE_TENANT_ID`)
 - `KEY_VAULT_NAME` (Key Vault that stores Entra login client secret)
 - `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional, defaults to `entra-login-client-secret`)
+- `FOUNDRY_API_KEY_SECRET_NAME` (optional, defaults to `foundry-api-key`)
 - `DEFAULT_GITHUB_ENVIRONMENT` (optional, useful for `push` trigger fallback)
 
 ### Step 2: Add GitHub Environment Secrets (runtime provider keys only)
@@ -126,8 +127,13 @@ In your GitHub repo:
 
 Add:
 
-- `FOUNDRY_API_KEY`
 - `OPENAI_API_KEY` (optional)
+
+Store your Foundry API key in Key Vault instead (same vault as login secret):
+
+```bash
+az keyvault secret set --vault-name <KEY_VAULT_NAME> --name foundry-api-key --value <FOUNDRY_API_KEY>
+```
 
 You do NOT need to add ACR variable.
 ACR name is generated automatically from `ENVIRONMENT_NAME`.

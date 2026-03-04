@@ -101,6 +101,7 @@ ENTRA_LOGIN_CLIENT_ID = <entra-login-app-client-id>
 ENTRA_AUTH_TENANT_ID = <tenant-id> (optional; defaults to AZURE_TENANT_ID)
 KEY_VAULT_NAME = <key-vault-containing-login-secret>
 ENTRA_LOGIN_CLIENT_SECRET_NAME = entra-login-client-secret (optional; default shown)
+FOUNDRY_API_KEY_SECRET_NAME = foundry-api-key (optional; default shown)
 DEFAULT_GITHUB_ENVIRONMENT = <tenant-environment-name> (optional push fallback)
 ============================================================
 7) GITHUB SECRETS (ENVIRONMENT SECRETS)
@@ -108,8 +109,10 @@ GitHub:
 Repo -> Settings -> Environments -> <tenant-environment-name> -> Secrets
 
 Add:
-FOUNDRY_API_KEY
 OPENAI_API_KEY (optional)
+
+Set Foundry key in Key Vault instead:
+az keyvault secret set --vault-name <KEY_VAULT_NAME> --name foundry-api-key --value <FOUNDRY_API_KEY>
 ============================================================
 8) DEPLOY
 GitHub -> Actions -> Deploy to Azure Container Apps -> Run workflow

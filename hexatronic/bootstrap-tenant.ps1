@@ -27,6 +27,7 @@ param(
   [string]$LoginAppDisplayName = '',
   [string]$KeyVaultName = '',
   [string]$LoginSecretName = 'entra-login-client-secret',
+  [string]$FoundryApiKeySecretName = 'foundry-api-key',
   [int]$LoginSecretYears = 1,
   [switch]$CreateResourceGroup
 )
@@ -402,6 +403,7 @@ $summary = [ordered]@{
   keyVault = @{
     name = $resolvedKeyVaultName
     secretName = $LoginSecretName
+    foundryApiKeySecretName = $FoundryApiKeySecretName
   }
   githubEnvironmentVariables = @{
     AZURE_CLIENT_ID = $deployApp.appId
@@ -413,10 +415,10 @@ $summary = [ordered]@{
     ENTRA_LOGIN_CLIENT_ID = $loginApp.appId
     KEY_VAULT_NAME = $resolvedKeyVaultName
     ENTRA_LOGIN_CLIENT_SECRET_NAME = $LoginSecretName
+    FOUNDRY_API_KEY_SECRET_NAME = $FoundryApiKeySecretName
     DEFAULT_GITHUB_ENVIRONMENT = $GitHubEnvironment
   }
   githubEnvironmentSecrets = @(
-    'FOUNDRY_API_KEY',
     'OPENAI_API_KEY (optional)'
   )
 }

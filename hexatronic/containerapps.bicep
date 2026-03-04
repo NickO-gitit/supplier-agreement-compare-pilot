@@ -6,6 +6,7 @@ param location string
 param containerAppEnvName string
 param containerAppName string
 param logAnalyticsName string
+param appInsightsName string
 param containerImage string
 param containerRegistryServer string
 param userIdentityId string
@@ -38,6 +39,17 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   properties: {
     sku: { name: 'PerGB2018' }
     retentionInDays: 30
+  }
+}
+
+// ── Application Insights (workspace-based) ───────────────────
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: appInsightsName
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
   }
 }
 
@@ -152,8 +164,20 @@ var openAiEnvVars = concat(
   ] : []
 )
 
+var appInsightsEnvVars = [
+  {
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: appInsights.properties.ConnectionString
+  }
+  {
+    name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
+    value: appInsights.properties.InstrumentationKey
+  }
+]
+
 var allEnvVars = concat(
   baseEnvVars,
+  appInsightsEnvVars,
   dbEnvVar,
   foundryEnvVars,
   foundryProjectEnvVars,
@@ -257,3 +281,4 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
 // ── Outputs ───────────────────────────────────────────────────
 output containerAppUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output containerAppId string = containerApp.id
+output applicationInsightsName string = appInsights.name

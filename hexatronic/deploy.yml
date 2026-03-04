@@ -168,6 +168,41 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Resolve Foundry API key from Key Vault
+        id: resolve_foundry_api_key
+        shell: bash
+        run: |
+          FOUNDRY_API_KEY_VALUE=""
+          FOUNDRY_ENDPOINT="${{ vars.FOUNDRY_ENDPOINT }}"
+          FOUNDRY_PROJECT_ENDPOINT="${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
+
+          if [[ -n "$FOUNDRY_ENDPOINT" || -n "$FOUNDRY_PROJECT_ENDPOINT" ]]; then
+            KEY_VAULT_NAME="${{ vars.KEY_VAULT_NAME }}"
+            if [[ -z "$KEY_VAULT_NAME" ]]; then
+              echo "Missing required repository variable: KEY_VAULT_NAME"
+              exit 1
+            fi
+
+            SECRET_NAME="${{ vars.FOUNDRY_API_KEY_SECRET_NAME }}"
+            if [[ -z "$SECRET_NAME" ]]; then
+              SECRET_NAME="foundry-api-key"
+            fi
+
+            FOUNDRY_API_KEY_VALUE=$(az keyvault secret show \
+              --vault-name "$KEY_VAULT_NAME" \
+              --name "$SECRET_NAME" \
+              --query value \
+              -o tsv)
+
+            if [[ -z "$FOUNDRY_API_KEY_VALUE" ]]; then
+              echo "Key Vault secret is empty or not found. Vault: $KEY_VAULT_NAME, Secret: $SECRET_NAME"
+              exit 1
+            fi
+          fi
+
+          echo "::add-mask::$FOUNDRY_API_KEY_VALUE"
+          echo "foundry_api_key=$FOUNDRY_API_KEY_VALUE" >> "$GITHUB_OUTPUT"
+
       - name: Find infrastructure folder
         id: infra
         run: |
@@ -255,7 +290,7 @@ jobs:
             sqlAdminPassword="${{ steps.db_scan.outputs.sql_admin_password }}"
             foundryEndpoint="${{ vars.FOUNDRY_ENDPOINT }}"
             foundryProjectEndpoint="${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
-            foundryApiKey="${{ secrets.FOUNDRY_API_KEY }}"
+            foundryApiKey="${{ steps.resolve_foundry_api_key.outputs.foundry_api_key }}"
             foundryDeployment="${{ vars.FOUNDRY_DEPLOYMENT }}"
             foundryApiVersion="${{ vars.FOUNDRY_API_VERSION }}"
             openAiApiKey="${{ secrets.OPENAI_API_KEY }}"
