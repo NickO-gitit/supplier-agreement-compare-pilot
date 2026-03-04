@@ -305,7 +305,7 @@ if ([string]::IsNullOrWhiteSpace($LoginAppDisplayName)) {
 $deployApp = Ensure-AppRegistration -DisplayName $DeployAppDisplayName
 $deploySp = Ensure-ServicePrincipal -AppId $deployApp.appId
 
-$federatedSubject = "repo:$RepoOwner/$RepoName:environment:$GitHubEnvironment"
+$federatedSubject = "repo:${RepoOwner}/${RepoName}:environment:${GitHubEnvironment}"
 $federatedName = "github-env-$safeEnv"
 if ($federatedName.Length -gt 120) {
   $federatedName = $federatedName.Substring(0, 120)
@@ -337,6 +337,13 @@ $loginSecret = az ad app credential reset `
   --display-name "container-app-auth-$safeEnv" `
   --years $LoginSecretYears `
   -o json | ConvertFrom-Json
+
+$loginSecretExpiry = $null
+if ($loginSecret.PSObject.Properties.Name -contains 'endDateTime') {
+  $loginSecretExpiry = $loginSecret.endDateTime
+} elseif ($loginSecret.PSObject.Properties.Name -contains 'endDate') {
+  $loginSecretExpiry = $loginSecret.endDate
+}
 
 $resolvedKeyVaultName = Resolve-KeyVaultName `
   -RequestedName $KeyVaultName `
@@ -384,7 +391,7 @@ $summary = [ordered]@{
     clientId = $loginApp.appId
     appObjectId = $loginApp.id
     servicePrincipalObjectId = $loginSp.id
-    clientSecretExpiresOn = $loginSecret.endDateTime
+    clientSecretExpiresOn = $loginSecretExpiry
   }
   keyVault = @{
     name = $resolvedKeyVaultName
