@@ -331,6 +331,12 @@ $loginApp = Ensure-AppRegistration `
   -SignInAudience 'AzureADMyOrg'
 $loginSp = Ensure-ServicePrincipal -AppId $loginApp.appId
 
+# Container Apps auth uses response_type=code id_token, so this must be enabled.
+az ad app update `
+  --id $loginApp.appId `
+  --enable-id-token-issuance true `
+  --output none
+
 $loginSecret = az ad app credential reset `
   --id $loginApp.appId `
   --append `
