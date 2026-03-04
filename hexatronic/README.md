@@ -30,9 +30,9 @@ This repository now supports Azure Container Apps directly:
 
 Required GitHub settings:
 
+- GitHub Environment (recommended per tenant): `customer-a-prod`, `customer-b-prod`, etc.
 - Secrets:
   - `FOUNDRY_API_KEY` (recommended)
-  - `ENTRA_LOGIN_CLIENT_SECRET` (required for enforced Entra auth)
   - `OPENAI_API_KEY` (optional fallback)
 - Variables:
   - `AZURE_CLIENT_ID` (OIDC app registration client ID)
@@ -46,6 +46,9 @@ Required GitHub settings:
   - `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
   - `ENTRA_LOGIN_CLIENT_ID` (required for enforced Entra auth)
   - `ENTRA_AUTH_TENANT_ID` (optional; defaults to `AZURE_TENANT_ID`)
+  - `KEY_VAULT_NAME` (required; Key Vault containing Entra login secret)
+  - `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional; default `entra-login-client-secret`)
+  - `DEFAULT_GITHUB_ENVIRONMENT` (optional fallback for push-triggered deployments)
   - `OPENAI_MODEL` (optional; default `gpt-4.1-mini`)
 
 ## Important safety rules
@@ -78,14 +81,26 @@ The workflow supports these infra paths automatically:
 - `./infra`
 - root folder (`./`)
 
+## Multi-tenant pattern (recommended)
+
+Use one GitHub Environment per tenant and federate OIDC to that environment subject:
+
+- Federated credential subject:
+  - `repo:<org>/<repo>:environment:<environment-name>`
+- Examples:
+  - `repo:NickO-gitit/supplier-agreement-compare:environment:customer-a-prod`
+  - `repo:NickO-gitit/supplier-agreement-compare:environment:customer-b-prod`
+
+This gives tenant isolation and approval gates per environment.
+
 ## One-time GitHub setup (very easy)
 
 Think of this like giving GitHub a "robot key" to your Azure subscription.
 
-### Step 1: Add GitHub Variables (OIDC + deployment settings)
+### Step 1: Add GitHub Environment Variables (OIDC + deployment settings)
 
 In your GitHub repo:
-`Settings -> Secrets and variables -> Actions -> Variables`
+`Settings -> Environments -> <your-environment> -> Variables`
 
 Add:
 
@@ -100,20 +115,50 @@ Add:
 - `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
 - `ENTRA_LOGIN_CLIENT_ID` (app registration client ID used for end-user login)
 - `ENTRA_AUTH_TENANT_ID` (optional, defaults to `AZURE_TENANT_ID`)
+- `KEY_VAULT_NAME` (Key Vault that stores Entra login client secret)
+- `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional, defaults to `entra-login-client-secret`)
+- `DEFAULT_GITHUB_ENVIRONMENT` (optional, useful for `push` trigger fallback)
 
-### Step 2: Add GitHub Secrets (runtime provider keys only)
+### Step 2: Add GitHub Environment Secrets (runtime provider keys only)
 
 In your GitHub repo:
-`Settings -> Secrets and variables -> Actions -> Secrets`
+`Settings -> Environments -> <your-environment> -> Secrets`
 
 Add:
 
 - `FOUNDRY_API_KEY`
-- `ENTRA_LOGIN_CLIENT_SECRET`
 - `OPENAI_API_KEY` (optional)
 
 You do NOT need to add ACR variable.
 ACR name is generated automatically from `ENVIRONMENT_NAME`.
+
+## Bootstrap a tenant automatically
+
+Use the bootstrap script to set up a new tenant end-to-end:
+
+```powershell
+pwsh ./hexatronic/bootstrap-tenant.ps1 `
+  -TenantId "<tenant-id>" `
+  -SubscriptionId "<subscription-id>" `
+  -ResourceGroupName "<resource-group>" `
+  -Location "swedencentral" `
+  -RepoOwner "NickO-gitit" `
+  -RepoName "supplier-agreement-compare" `
+  -GitHubEnvironment "customer-a-prod" `
+  -EnvironmentName "suppliercomparea-prod" `
+  -CreateResourceGroup
+```
+
+The script:
+
+1. Registers required Azure providers
+2. Creates/reuses OIDC deploy app + service principal
+3. Creates environment-based federated credential
+4. Assigns RG roles (`Contributor`, `User Access Administrator`)
+5. Creates/reuses web-login app + client secret
+6. Creates/reuses Key Vault and stores login client secret
+7. Grants deploy identity `Key Vault Secrets User`
+8. Outputs all GitHub Environment variables to apply
 
 ## Deploy like a 5-year-old guide
 
@@ -123,7 +168,9 @@ Imagine 4 buttons:
    - Push to `main` or `master`.
 
 2. **Robot wakes up**
-   - GitHub Action starts by itself.
+   - GitHub Action starts (push) or you run `workflow_dispatch`.
+
+   For multi-tenant deployments, use `workflow_dispatch` and choose `target_environment`.
 
 3. **Robot checks toys**
    - "Do we have Azure resources already?"
@@ -148,6 +195,10 @@ Prerequisite:
 
 - Your login app registration must include this redirect URI:
   - `https://<container-app-fqdn>/.auth/login/aad/callback`
+- Your login app client secret must be stored in Azure Key Vault
+  (name defaults to `entra-login-client-secret`).
+- The GitHub OIDC deploy app/service principal must have
+  `Key Vault Secrets User` on that vault.
 
 ## Local deployment (optional)
 

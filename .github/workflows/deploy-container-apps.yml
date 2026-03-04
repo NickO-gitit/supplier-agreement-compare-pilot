@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      target_environment:
+        description: "GitHub Environment to deploy (tenant-specific config)"
+        required: true
+        default: "production"
       deploy_sql:
         description: "Deploy a new SQL database (true/false)"
         required: false
@@ -13,20 +17,24 @@ on:
 
 env:
   IMAGE_NAME: ${{ github.event.repository.name }}
-  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-  AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
-  ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
-  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
 jobs:
   build:
     name: Build and Push Image
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment || vars.DEFAULT_GITHUB_ENVIRONMENT || 'production' }}
     permissions:
       contents: read
       id-token: write
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}
+      ENTRA_LOGIN_CLIENT_ID: ${{ vars.ENTRA_LOGIN_CLIENT_ID }}
     outputs:
       image_sha: ${{ steps.image.outputs.image_sha }}
 
@@ -34,10 +42,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show target environment
+        shell: bash
+        run: |
+          echo "Deploy target environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment || vars.DEFAULT_GITHUB_ENVIRONMENT || 'production' }}"
+
       - name: Validate OIDC variables
         shell: bash
         run: |
-          for required in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+          for required in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_LOCATION ENVIRONMENT_NAME; do
             if [[ -z "${!required}" ]]; then
               echo "Missing required repository variable: $required"
               exit 1
@@ -101,9 +114,19 @@ jobs:
     name: Deploy Infrastructure
     runs-on: ubuntu-latest
     needs: build
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment || vars.DEFAULT_GITHUB_ENVIRONMENT || 'production' }}
     permissions:
       contents: read
       id-token: write
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}
+      ENTRA_LOGIN_CLIENT_ID: ${{ vars.ENTRA_LOGIN_CLIENT_ID }}
 
     steps:
       - name: Checkout
@@ -112,7 +135,7 @@ jobs:
       - name: Validate OIDC variables
         shell: bash
         run: |
-          for required in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+          for required in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_LOCATION ENVIRONMENT_NAME KEY_VAULT_NAME ENTRA_LOGIN_CLIENT_ID; do
             if [[ -z "${!required}" ]]; then
               echo "Missing required repository variable: $required"
               exit 1
@@ -154,6 +177,34 @@ jobs:
           echo "Deployment complete"
           echo "App URL: ${{ steps.deploy.outputs.containerAppUrl }}"
 
+      - name: Resolve Entra login secret from Key Vault
+        shell: bash
+        run: |
+          KEY_VAULT_NAME="${{ vars.KEY_VAULT_NAME }}"
+          if [[ -z "$KEY_VAULT_NAME" ]]; then
+            echo "Missing required repository variable: KEY_VAULT_NAME"
+            exit 1
+          fi
+
+          SECRET_NAME="${{ vars.ENTRA_LOGIN_CLIENT_SECRET_NAME }}"
+          if [[ -z "$SECRET_NAME" ]]; then
+            SECRET_NAME="entra-login-client-secret"
+          fi
+
+          ENTRA_LOGIN_CLIENT_SECRET=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name "$SECRET_NAME" \
+            --query value \
+            -o tsv)
+
+          if [[ -z "$ENTRA_LOGIN_CLIENT_SECRET" ]]; then
+            echo "Key Vault secret is empty or not found. Vault: $KEY_VAULT_NAME, Secret: $SECRET_NAME"
+            exit 1
+          fi
+
+          echo "::add-mask::$ENTRA_LOGIN_CLIENT_SECRET"
+          echo "ENTRA_LOGIN_CLIENT_SECRET=$ENTRA_LOGIN_CLIENT_SECRET" >> "$GITHUB_ENV"
+
       - name: Enforce Entra Authentication
         shell: bash
         run: |
@@ -168,8 +219,8 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "${{ secrets.ENTRA_LOGIN_CLIENT_SECRET }}" ]]; then
-            echo "Missing required repository secret: ENTRA_LOGIN_CLIENT_SECRET"
+          if [[ -z "${ENTRA_LOGIN_CLIENT_SECRET:-}" ]]; then
+            echo "ENTRA_LOGIN_CLIENT_SECRET was not resolved from Key Vault."
             exit 1
           fi
 
@@ -189,7 +240,7 @@ jobs:
             --name "$APP_NAME" \
             --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
             --client-id "${{ vars.ENTRA_LOGIN_CLIENT_ID }}" \
-            --client-secret "${{ secrets.ENTRA_LOGIN_CLIENT_SECRET }}" \
+            --client-secret "$ENTRA_LOGIN_CLIENT_SECRET" \
             --tenant-id "$AUTH_TENANT_ID" \
             --yes \
             --output none

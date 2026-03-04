@@ -31,13 +31,13 @@ Certificates & secrets -> Federated credentials -> Add
 
 Use:
 
-Entity type: Branch
+Entity type: Environment
 Organization: NickO-gitit
 Repository: supplier-agreement-compare
-Branch: main
+Environment: <tenant-environment-name, e.g. customer-a-prod>
 Credential details:
 
-Name: github-main-supplier-compare
+Name: github-env-supplier-compare
 Description: any text
 Audience: api://AzureADTokenExchange (default)
 ============================================================
@@ -80,9 +80,9 @@ done
 Wait until all show: Registered
 
 ============================================================
-6) GITHUB VARIABLES (REPOSITORY VARIABLES)
+6) GITHUB VARIABLES (ENVIRONMENT VARIABLES)
 GitHub:
-Repo -> Settings -> Secrets and variables -> Actions -> Variables
+Repo -> Settings -> Environments -> <tenant-environment-name> -> Variables
 
 Add:
 
@@ -99,20 +99,45 @@ FOUNDRY_API_VERSION = 2024-10-21
 OPENAI_MODEL = gpt-4.1-mini
 ENTRA_LOGIN_CLIENT_ID = <entra-login-app-client-id>
 ENTRA_AUTH_TENANT_ID = <tenant-id> (optional; defaults to AZURE_TENANT_ID)
+KEY_VAULT_NAME = <key-vault-containing-login-secret>
+ENTRA_LOGIN_CLIENT_SECRET_NAME = entra-login-client-secret (optional; default shown)
+DEFAULT_GITHUB_ENVIRONMENT = <tenant-environment-name> (optional push fallback)
 ============================================================
-7) GITHUB SECRETS (REPOSITORY SECRETS)
+7) GITHUB SECRETS (ENVIRONMENT SECRETS)
 GitHub:
-Repo -> Settings -> Secrets and variables -> Actions -> Secrets
+Repo -> Settings -> Environments -> <tenant-environment-name> -> Secrets
 
 Add:
 FOUNDRY_API_KEY
-ENTRA_LOGIN_CLIENT_SECRET
 OPENAI_API_KEY (optional)
 ============================================================
 8) DEPLOY
 GitHub -> Actions -> Deploy to Azure Container Apps -> Run workflow
 
+Set target_environment = <tenant-environment-name>
 Keep deploy_sql=false unless you want SQL provisioned.
+============================================================
+8b) BOOTSTRAP NEW TENANT (AUTOMATED)
+Run once per tenant:
+
+pwsh ./hexatronic/bootstrap-tenant.ps1 `
+  -TenantId "<tenant-id>" `
+  -SubscriptionId "<subscription-id>" `
+  -ResourceGroupName "<rg-name>" `
+  -Location "swedencentral" `
+  -RepoOwner "NickO-gitit" `
+  -RepoName "supplier-agreement-compare" `
+  -GitHubEnvironment "<tenant-environment-name>" `
+  -EnvironmentName "<container-app-prefix>" `
+  -CreateResourceGroup
+
+This script creates:
+- OIDC deploy app + environment-based federated credential
+- RG RBAC assignments
+- separate web-login app + client secret
+- Key Vault + secret storage
+- Key Vault read role for deploy identity
+- output file with all values to set in GitHub Environment variables
 ============================================================
 9) VERIFY
 After workflow success:
@@ -180,7 +205,8 @@ A) Create a separate Entra App Registration for USER LOGIN
    - Single-tenant
    - Redirect URI (Web):
      https://<app-url>/.auth/login/aad/callback
-   - Create client secret and copy its value
+   - Create client secret and store its value in Azure Key Vault
+     (secret name: entra-login-client-secret, or your custom name)
 
 B) Configure Container App Authentication
    - Azure Portal -> Container App (<ENVIRONMENT_NAME>-app) -> Authentication
@@ -206,6 +232,6 @@ Result:
 
 NOTES FROM YOUR CLARIFICATIONS
 You are using Foundry project endpoint (not standard Azure OpenAI endpoint).
-Entity type for federated credential is Branch.
+Entity type for federated credential should be Environment for multi-tenant isolation.
 FOUNDRY_API_VERSION is not a UI field you "find"; it is an API version string.
 Static Web Apps auto-deploy is disabled; Container Apps workflow is primary.
