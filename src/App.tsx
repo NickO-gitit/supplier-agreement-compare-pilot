@@ -10,6 +10,14 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import {
+  Document as DocxDocument,
+  HeadingLevel,
+  Packer,
+  Paragraph,
+  TextRun,
+} from 'docx';
 import type {
   ChangeResponse,
   ChangeResponseStatus,
@@ -174,6 +182,15 @@ function normalizeEmailText(value: string): string {
     .replace(/\u2026/g, '...')
     .replace(/\u2192/g, '->')
     .replace(/\u00A0/g, ' ');
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function riskForChange(risks: RiskAnalysis[], changeId: string): RiskAnalysis | null {
@@ -572,7 +589,7 @@ function App() {
       setAskLoading(false);
     }
   }, [askQuestion, selectedDifference, selectedRisk]);
-  const exportResponse = useCallback(() => {
+  const exportResponse = useCallback(async () => {
     if (!currentComparison) return;
 
     const lines: string[] = [];
@@ -601,12 +618,10 @@ function App() {
     });
 
     const plainText = lines.join('\n');
-    let fileContent = plainText;
-    let mimeType = 'text/plain;charset=utf-8';
 
     if (exportFormat === 'email') {
       const sanitizedBody = normalizeEmailText(plainText).replace(/\n/g, '\r\n');
-      fileContent = [
+      const emlContent = [
         'Subject: Supplier Response Draft',
         'MIME-Version: 1.0',
         'Content-Type: text/plain; charset=UTF-8',
@@ -614,17 +629,124 @@ function App() {
         '',
         sanitizedBody,
       ].join('\r\n');
-      mimeType = 'message/rfc822;charset=utf-8';
+      const emlBlob = new Blob([`\uFEFF${emlContent}`], {
+        type: 'message/rfc822;charset=utf-8',
+      });
+      downloadBlob(emlBlob, `supplier-response-${currentComparison.id}.eml`);
+      setExportOpen(false);
+      return;
     }
 
-    const blob = new Blob([`\uFEFF${fileContent}`], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const extension = exportFormat === 'email' ? 'eml' : exportFormat === 'docx' ? 'docx' : 'pdf';
-    link.href = url;
-    link.download = `supplier-response-${currentComparison.id}.${extension}`;
-    link.click();
-    URL.revokeObjectURL(url);
+    if (exportFormat === 'pdf') {
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+      const margin = 40;
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const maxWidth = pageWidth - margin * 2;
+      const lineHeight = 14;
+      let y = 48;
+
+      const writeBlock = (text: string, bold = false) => {
+        const safeText = normalizeEmailText(text || '');
+        const chunks = pdf.splitTextToSize(safeText, maxWidth);
+        const projectedHeight = chunks.length * lineHeight;
+        if (y + projectedHeight > pageHeight - margin) {
+          pdf.addPage();
+          y = margin;
+        }
+        pdf.setFont('helvetica', bold ? 'bold' : 'normal');
+        pdf.text(chunks, margin, y);
+        y += projectedHeight + 4;
+      };
+
+      lines.forEach((line, index) => {
+        const isHeading = index === 0 || /^#\d+/.test(line) || line.endsWith(':');
+        writeBlock(line.length === 0 ? ' ' : line, isHeading);
+      });
+
+      const pdfBlob = pdf.output('blob');
+      downloadBlob(pdfBlob, `supplier-response-${currentComparison.id}.pdf`);
+      setExportOpen(false);
+      return;
+    }
+
+    const docRows = currentComparison.differences.map((difference, index) => {
+      const response = responses.find((entry) => entry.changeId === difference.id);
+      const risk = riskForChange(currentComparison.riskAnalyses, difference.id);
+      return {
+        index: index + 1,
+        type: difference.type,
+        risk: risk?.riskLevel || 'unknown',
+        response: response?.status || 'pending',
+        comment: response?.comment || '[none]',
+        original: difference.originalText || '',
+        proposed: difference.proposedText || '',
+      };
+    });
+
+    const docChildren: Paragraph[] = [
+      new Paragraph({
+        text: 'Supplier Response Export',
+        heading: HeadingLevel.HEADING_1,
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: `Generated: ${new Date().toISOString()}` })],
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: `Customer: ${currentCustomer?.name || 'N/A'}` })],
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: `Original file: ${currentComparison.originalDocument?.name || 'N/A'}` })],
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: `Proposed file: ${currentComparison.proposedDocument?.name || 'N/A'}` })],
+      }),
+      new Paragraph({ text: '' }),
+      new Paragraph({
+        text: 'Cover note',
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: coverNote || '' }),
+      new Paragraph({ text: '' }),
+      new Paragraph({
+        text: 'Changes',
+        heading: HeadingLevel.HEADING_2,
+      }),
+    ];
+
+    docRows.forEach((row) => {
+      docChildren.push(
+        new Paragraph({
+          text: `#${row.index}`,
+          heading: HeadingLevel.HEADING_3,
+        }),
+        new Paragraph({ text: `Type: ${row.type}` }),
+        new Paragraph({ text: `Risk: ${row.risk}` }),
+        new Paragraph({ text: `Response: ${row.response}` }),
+        new Paragraph({ text: `Comment: ${row.comment}` })
+      );
+      if (row.original) {
+        docChildren.push(new Paragraph({ text: `Original: ${row.original}` }));
+      }
+      if (row.proposed) {
+        docChildren.push(new Paragraph({ text: `Proposed: ${row.proposed}` }));
+      }
+      docChildren.push(new Paragraph({ text: '' }));
+    });
+
+    const docx = new DocxDocument({
+      sections: [
+        {
+          children: docChildren,
+        },
+      ],
+    });
+
+    const docxBlob = await Packer.toBlob(docx);
+    downloadBlob(
+      docxBlob,
+      `supplier-response-${currentComparison.id}.docx`
+    );
     setExportOpen(false);
   }, [coverNote, currentComparison, currentCustomer?.name, exportFormat, responses]);
 
