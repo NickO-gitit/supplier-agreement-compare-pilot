@@ -28,6 +28,7 @@ param(
   [string]$KeyVaultName = '',
   [string]$LoginSecretName = 'entra-login-client-secret',
   [string]$FoundryApiKeySecretName = 'foundry-api-key',
+  [string]$OpenAiApiKeySecretName = 'openai-api-key',
   [int]$LoginSecretYears = 1,
   [switch]$CreateResourceGroup
 )
@@ -270,6 +271,7 @@ $providers = @(
   'Microsoft.App',
   'Microsoft.ContainerRegistry',
   'Microsoft.OperationalInsights',
+  'Microsoft.AppConfiguration',
   'Microsoft.ManagedIdentity',
   'Microsoft.Authorization',
   'Microsoft.Sql',
@@ -404,6 +406,7 @@ $summary = [ordered]@{
     name = $resolvedKeyVaultName
     secretName = $LoginSecretName
     foundryApiKeySecretName = $FoundryApiKeySecretName
+    openAiApiKeySecretName = $OpenAiApiKeySecretName
   }
   githubEnvironmentVariables = @{
     AZURE_CLIENT_ID = $deployApp.appId
@@ -416,6 +419,7 @@ $summary = [ordered]@{
     KEY_VAULT_NAME = $resolvedKeyVaultName
     ENTRA_LOGIN_CLIENT_SECRET_NAME = $LoginSecretName
     FOUNDRY_API_KEY_SECRET_NAME = $FoundryApiKeySecretName
+    OPENAI_API_KEY_SECRET_NAME = $OpenAiApiKeySecretName
     DEFAULT_GITHUB_ENVIRONMENT = $GitHubEnvironment
   }
   githubEnvironmentSecrets = @(

@@ -149,40 +149,50 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Resolve Foundry API key from Key Vault
-        id: resolve_foundry_api_key
+      - name: Resolve AI secrets from Key Vault
+        id: resolve_ai_secrets
         shell: bash
         run: |
-          FOUNDRY_API_KEY_VALUE=""
-          FOUNDRY_ENDPOINT="${{ vars.FOUNDRY_ENDPOINT }}"
-          FOUNDRY_PROJECT_ENDPOINT="${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
-
-          if [[ -n "$FOUNDRY_ENDPOINT" || -n "$FOUNDRY_PROJECT_ENDPOINT" ]]; then
-            KEY_VAULT_NAME="${{ vars.KEY_VAULT_NAME }}"
-            if [[ -z "$KEY_VAULT_NAME" ]]; then
-              echo "Missing required repository variable: KEY_VAULT_NAME"
-              exit 1
-            fi
-
-            SECRET_NAME="${{ vars.FOUNDRY_API_KEY_SECRET_NAME }}"
-            if [[ -z "$SECRET_NAME" ]]; then
-              SECRET_NAME="foundry-api-key"
-            fi
-
-            FOUNDRY_API_KEY_VALUE=$(az keyvault secret show \
-              --vault-name "$KEY_VAULT_NAME" \
-              --name "$SECRET_NAME" \
-              --query value \
-              -o tsv)
-
-            if [[ -z "$FOUNDRY_API_KEY_VALUE" ]]; then
-              echo "Key Vault secret is empty or not found. Vault: $KEY_VAULT_NAME, Secret: $SECRET_NAME"
-              exit 1
-            fi
+          KEY_VAULT_NAME="${{ vars.KEY_VAULT_NAME }}"
+          if [[ -z "$KEY_VAULT_NAME" ]]; then
+            echo "Missing required repository variable: KEY_VAULT_NAME"
+            exit 1
           fi
 
+          FOUNDRY_SECRET_NAME="${{ vars.FOUNDRY_API_KEY_SECRET_NAME }}"
+          if [[ -z "$FOUNDRY_SECRET_NAME" ]]; then
+            FOUNDRY_SECRET_NAME="foundry-api-key"
+          fi
+
+          FOUNDRY_API_KEY_VALUE=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name "$FOUNDRY_SECRET_NAME" \
+            --query value \
+            -o tsv)
+
+          if [[ -z "$FOUNDRY_API_KEY_VALUE" ]]; then
+            echo "Key Vault secret is empty or not found. Vault: $KEY_VAULT_NAME, Secret: $FOUNDRY_SECRET_NAME"
+            exit 1
+          fi
+
+          OPENAI_API_KEY_VALUE=""
+          OPENAI_SECRET_NAME="${{ vars.OPENAI_API_KEY_SECRET_NAME }}"
+          if [[ -z "$OPENAI_SECRET_NAME" ]]; then
+            OPENAI_SECRET_NAME="openai-api-key"
+          fi
+
+          OPENAI_API_KEY_VALUE=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name "$OPENAI_SECRET_NAME" \
+            --query value \
+            -o tsv 2>/dev/null || true)
+
           echo "::add-mask::$FOUNDRY_API_KEY_VALUE"
+          if [[ -n "$OPENAI_API_KEY_VALUE" ]]; then
+            echo "::add-mask::$OPENAI_API_KEY_VALUE"
+          fi
           echo "foundry_api_key=$FOUNDRY_API_KEY_VALUE" >> "$GITHUB_OUTPUT"
+          echo "openai_api_key=$OPENAI_API_KEY_VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Deploy Bicep
         id: deploy
@@ -199,10 +209,10 @@ jobs:
             existingDatabaseConnectionString="${{ vars.DATABASE_CONNECTION_STRING }}"
             foundryEndpoint="${{ vars.FOUNDRY_ENDPOINT }}"
             foundryProjectEndpoint="${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
-            foundryApiKey="${{ steps.resolve_foundry_api_key.outputs.foundry_api_key }}"
+            foundryApiKey="${{ steps.resolve_ai_secrets.outputs.foundry_api_key }}"
             foundryDeployment="${{ vars.FOUNDRY_DEPLOYMENT }}"
             foundryApiVersion="${{ vars.FOUNDRY_API_VERSION }}"
-            openAiApiKey="${{ secrets.OPENAI_API_KEY }}"
+            openAiApiKey="${{ steps.resolve_ai_secrets.outputs.openai_api_key }}"
             openAiModel="${{ vars.OPENAI_MODEL }}"
           failOnStdErr: false
           deploymentName: deploy-${{ github.run_number }}-${{ github.sha }}
@@ -211,6 +221,48 @@ jobs:
         run: |
           echo "Deployment complete"
           echo "App URL: ${{ steps.deploy.outputs.containerAppUrl }}"
+
+      - name: Seed Azure App Configuration values (optional)
+        shell: bash
+        run: |
+          APP_CONFIG_NAME="${{ steps.deploy.outputs.appConfigurationName }}"
+          if [[ -z "$APP_CONFIG_NAME" ]]; then
+            echo "No App Configuration output returned. Skipping config seed."
+            exit 0
+          fi
+
+          APP_CONFIG_CONNECTION_STRING=$(az appconfig credential list \
+            --name "$APP_CONFIG_NAME" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query "[0].connectionString" \
+            -o tsv)
+
+          if [[ -z "$APP_CONFIG_CONNECTION_STRING" ]]; then
+            echo "Unable to resolve App Configuration connection string."
+            exit 1
+          fi
+
+          CONFIG_LABEL="${{ env.ENVIRONMENT_NAME }}"
+
+          set_kv() {
+            local key="$1"
+            local value="$2"
+            if [[ -n "$value" ]]; then
+              az appconfig kv set \
+                --connection-string "$APP_CONFIG_CONNECTION_STRING" \
+                --key "$key" \
+                --label "$CONFIG_LABEL" \
+                --value "$value" \
+                --yes \
+                --output none
+            fi
+          }
+
+          set_kv "FOUNDRY_PROJECT_ENDPOINT" "${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
+          set_kv "AZURE_FOUNDRY_ENDPOINT" "${{ vars.FOUNDRY_ENDPOINT }}"
+          set_kv "FOUNDRY_DEPLOYMENT" "${{ vars.FOUNDRY_DEPLOYMENT }}"
+          set_kv "FOUNDRY_API_VERSION" "${{ vars.FOUNDRY_API_VERSION }}"
+          set_kv "OPENAI_MODEL" "${{ vars.OPENAI_MODEL }}"
 
       - name: Resolve Entra login secret from Key Vault
         shell: bash

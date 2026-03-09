@@ -116,6 +116,8 @@ var containerAppEnvName = '${prefix}-cae'
 var containerAppName = '${prefix}-app'
 var logAnalyticsName = '${prefix}-logs'
 var appInsightsName = '${prefix}-appi'
+var appConfigBase = replace(toLower('${prefix}appcfg'), '-', '')
+var appConfigName = take('${appConfigBase}${take(uniqueString(resourceGroup().id), 6)}', 50)
 var sqlServerName = '${prefix}-sql'
 var userIdentityName = '${prefix}-id'
 var acrNameBase = replace(toLower('${prefix}acr'), '-', '')
@@ -138,6 +140,25 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' =
 resource userIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: userIdentityName
   location: location
+}
+
+// ── App Configuration (tenant-side non-secret config) ───────
+resource appConfiguration 'Microsoft.AppConfiguration/configurationStores@2023-03-01' = {
+  name: appConfigName
+  location: location
+  sku: {
+    name: 'standard'
+  }
+}
+
+resource appConfigDataReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(appConfiguration.id, userIdentity.id, 'app-configuration-data-reader')
+  scope: appConfiguration
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '516239f1-63e1-4d78-a4de-a74fb236a071')
+    principalId: userIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 // ── SQL Module ───────────────────────────────────────────────
@@ -179,6 +200,7 @@ module containerAppModule 'containerapps.bicep' = {
     containerAppName: containerAppName
     logAnalyticsName: logAnalyticsName
     appInsightsName: appInsightsName
+    appConfigEndpoint: appConfiguration.properties.endpoint
     containerImage: containerImage
     containerRegistryServer: containerRegistry.properties.loginServer
     userIdentityId: userIdentity.id
@@ -207,5 +229,7 @@ module containerAppModule 'containerapps.bicep' = {
 output containerAppUrl string = containerAppModule.outputs.containerAppUrl
 output containerAppName string = containerAppName
 output applicationInsightsName string = containerAppModule.outputs.applicationInsightsName
+output appConfigurationName string = appConfiguration.name
+output appConfigurationEndpoint string = appConfiguration.properties.endpoint
 output managedIdentityClientId string = userIdentity.properties.clientId
 output managedIdentityPrincipalId string = userIdentity.properties.principalId

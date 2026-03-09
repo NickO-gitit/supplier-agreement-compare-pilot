@@ -4,6 +4,7 @@ import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { loadTenantConfig } from './loadTenantConfig.mjs';
 
 const require = createRequire(import.meta.url);
 const analyzeRiskHandler = require('../api/analyze-risk/index.js');
@@ -33,6 +34,8 @@ const MIME_TYPES = {
   '.ttf': 'font/ttf',
   '.txt': 'text/plain; charset=utf-8',
 };
+
+await loadTenantConfig(console);
 
 const port = Number(process.env.PORT || '3000');
 

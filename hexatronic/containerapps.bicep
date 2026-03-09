@@ -7,6 +7,7 @@ param containerAppEnvName string
 param containerAppName string
 param logAnalyticsName string
 param appInsightsName string
+param appConfigEndpoint string
 param containerImage string
 param containerRegistryServer string
 param userIdentityId string
@@ -78,6 +79,14 @@ var baseEnvVars = [
   {
     name: 'AZURE_CLIENT_ID'
     value: userIdentityClientId
+  }
+  {
+    name: 'APP_CONFIG_ENDPOINT'
+    value: appConfigEndpoint
+  }
+  {
+    name: 'APP_CONFIG_LABEL'
+    value: environmentName
   }
 ]
 

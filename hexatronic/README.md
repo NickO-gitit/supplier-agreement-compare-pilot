@@ -40,16 +40,13 @@ Required GitHub settings:
   - `AZURE_RESOURCE_GROUP`
   - `AZURE_LOCATION`
   - `ENVIRONMENT_NAME`
-  - `FOUNDRY_PROJECT_ENDPOINT`
-  - `FOUNDRY_DEPLOYMENT`
-  - `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
   - `ENTRA_LOGIN_CLIENT_ID` (required for enforced Entra auth)
   - `ENTRA_AUTH_TENANT_ID` (optional; defaults to `AZURE_TENANT_ID`)
   - `KEY_VAULT_NAME` (required; Key Vault containing Entra login secret)
   - `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional; default `entra-login-client-secret`)
   - `FOUNDRY_API_KEY_SECRET_NAME` (optional; default `foundry-api-key`)
+  - `OPENAI_API_KEY_SECRET_NAME` (optional; default `openai-api-key`)
   - `DEFAULT_GITHUB_ENVIRONMENT` (optional fallback for push-triggered deployments)
-  - `OPENAI_MODEL` (optional; default `gpt-4.1-mini`)
 
 ## Important safety rules
 
@@ -110,15 +107,20 @@ Add:
 - `AZURE_RESOURCE_GROUP` (example: `rg-myapp-prod`)
 - `AZURE_LOCATION` (example: `swedencentral`)
 - `ENVIRONMENT_NAME` (example: `myapp-prod`)
-- `FOUNDRY_PROJECT_ENDPOINT` (example: `https://<resource>.services.ai.azure.com/api/projects/<project>`)
-- `FOUNDRY_DEPLOYMENT` (example: `gpt-4.1-mini`)
-- `FOUNDRY_API_VERSION` (optional; default `2024-10-21`)
 - `ENTRA_LOGIN_CLIENT_ID` (app registration client ID used for end-user login)
 - `ENTRA_AUTH_TENANT_ID` (optional, defaults to `AZURE_TENANT_ID`)
 - `KEY_VAULT_NAME` (Key Vault that stores Entra login client secret)
 - `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional, defaults to `entra-login-client-secret`)
 - `FOUNDRY_API_KEY_SECRET_NAME` (optional, defaults to `foundry-api-key`)
+- `OPENAI_API_KEY_SECRET_NAME` (optional, defaults to `openai-api-key`)
 - `DEFAULT_GITHUB_ENVIRONMENT` (optional, useful for `push` trigger fallback)
+
+Optional migration-only variables (used to seed App Configuration automatically on deploy):
+- `FOUNDRY_ENDPOINT`
+- `FOUNDRY_PROJECT_ENDPOINT`
+- `FOUNDRY_DEPLOYMENT`
+- `FOUNDRY_API_VERSION`
+- `OPENAI_MODEL`
 
 ### Step 2: Add GitHub Environment Secrets (runtime provider keys only)
 
@@ -133,6 +135,12 @@ Store your Foundry API key in Key Vault instead (same vault as login secret):
 
 ```bash
 az keyvault secret set --vault-name <KEY_VAULT_NAME> --name foundry-api-key --value <FOUNDRY_API_KEY>
+```
+
+Optional (if you want OpenAI fallback from Key Vault too):
+
+```bash
+az keyvault secret set --vault-name <KEY_VAULT_NAME> --name openai-api-key --value <OPENAI_API_KEY>
 ```
 
 You do NOT need to add ACR variable.
