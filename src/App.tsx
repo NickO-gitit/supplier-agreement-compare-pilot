@@ -12,11 +12,17 @@ import {
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import {
+  AlignmentType,
+  BorderStyle,
   Document as DocxDocument,
-  HeadingLevel,
+  PageOrientation,
   Packer,
   Paragraph,
+  Table,
+  TableCell,
+  TableRow,
   TextRun,
+  WidthType,
 } from 'docx';
 import type {
   ChangeResponse,
@@ -29,7 +35,7 @@ import type {
   Document,
   RiskAnalysis,
 } from './types';
-import { computeDiff, generateDiffHTML, generateInlineDiffHTML } from './services/diffEngine';
+import { computeDiff, generateInlineDiffHTML } from './services/diffEngine';
 import { extractText, getFileType } from './services/extractText';
 import { analyzeAllRisks, askRiskFollowUp, isConfigured } from './services/riskAnalysis';
 import {
@@ -63,6 +69,24 @@ type UploadState = {
 };
 
 type DraftStatus = Exclude<ChangeResponseStatus, 'pending'> | null;
+type ExportChangeTone = 'neutral' | 'added' | 'removed';
+
+type ExportChangePart = {
+  label: string;
+  text: string;
+  tone: ExportChangeTone;
+  strike?: boolean;
+};
+
+type ExportRow = {
+  index: number;
+  section: string;
+  changeParts: ExportChangePart[];
+  risk: string;
+  type: Difference['type'];
+  response: ChangeResponseStatus;
+  comment: string;
+};
 
 const COLOR_BADGE_CLASS: Record<CustomerColor, string> = {
   blue: 'bg-blue-600',
@@ -315,6 +339,102 @@ function getDifferenceContextSections(
     original: parsed.original || fallbackOriginal,
     proposed: parsed.proposed || fallbackProposed,
   };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function toSingleLine(value: string): string {
+  return normalizeEmailText(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncateForExport(value: string, max = 120): string {
+  const single = toSingleLine(value);
+  if (single.length <= max) return single;
+  return `${single.slice(0, max - 1).trimEnd()}...`;
+}
+
+function extractSectionHeadingFromContext(context: string): string | null {
+  const lines = context
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^Original section context:|^Proposed section context:/i.test(line))
+    .filter((line) => line !== '[Not available]');
+
+  const numberedHeading = lines.find((line) => /^\d+(?:\.\d+){0,6}\.?\s+\S/.test(line));
+  if (numberedHeading) return truncateForExport(numberedHeading, 140);
+
+  return lines.length > 0 ? truncateForExport(lines[0], 140) : null;
+}
+
+function extractSectionForExport(difference: Difference): string {
+  const fromContext = extractSectionHeadingFromContext(difference.context || '');
+  if (fromContext) return fromContext;
+
+  const source = difference.originalText || difference.proposedText || '';
+  if (!source.trim()) return `Change ${difference.id}`;
+
+  const firstLine = source
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return truncateForExport(firstLine || source, 140);
+}
+
+function buildChangePartsForExport(difference: Difference): ExportChangePart[] {
+  const removed = normalizeEmailText(difference.originalText || '').trim();
+  const added = normalizeEmailText(difference.proposedText || '').trim();
+
+  if (difference.type === 'deletion') {
+    return [{ label: 'Removed', text: removed || '[No text]', tone: 'removed', strike: true }];
+  }
+  if (difference.type === 'addition') {
+    return [{ label: 'Adds', text: added || '[No text]', tone: 'added' }];
+  }
+
+  const parts: ExportChangePart[] = [];
+  if (removed) parts.push({ label: 'Removed', text: removed, tone: 'removed', strike: true });
+  if (added) parts.push({ label: 'Adds', text: added, tone: 'added' });
+  if (parts.length === 0) parts.push({ label: 'Change', text: '[No text]', tone: 'neutral' });
+  return parts;
+}
+
+function changeTypeLabel(type: Difference['type']): string {
+  if (type === 'addition') return 'Addition';
+  if (type === 'deletion') return 'Deletion';
+  return 'Modification';
+}
+
+function riskPalette(level: string): { text: string; bg: string } {
+  const normalized = (level || '').toLowerCase();
+  if (normalized === 'high') return { text: 'BE123C', bg: 'FFF1F2' };
+  if (normalized === 'medium') return { text: 'B45309', bg: 'FFFBEB' };
+  if (normalized === 'low') return { text: '15803D', bg: 'F0FDF4' };
+  return { text: '475569', bg: 'F8FAFC' };
+}
+
+function responsePalette(status: ChangeResponseStatus): { text: string; bg: string } {
+  if (status === 'accepted') return { text: '15803D', bg: 'F0FDF4' };
+  if (status === 'countered') return { text: '1D4ED8', bg: 'EFF6FF' };
+  if (status === 'rejected') return { text: 'BE123C', bg: 'FFF1F2' };
+  if (status === 'ignored') return { text: '475569', bg: 'F1F5F9' };
+  return { text: '64748B', bg: 'F8FAFC' };
+}
+
+function toneColor(tone: ExportChangeTone): string {
+  if (tone === 'added') return '15803D';
+  if (tone === 'removed') return 'BE123C';
+  return '334155';
 }
 
 function App() {
@@ -793,79 +913,323 @@ function App() {
   const exportResponse = useCallback(async () => {
     if (!currentComparison) return;
 
-    const lines: string[] = [];
-    lines.push('SUPPLIER RESPONSE EXPORT');
-    lines.push('========================');
-    lines.push(`Generated: ${new Date().toISOString()}`);
-    lines.push(`Customer: ${currentCustomer?.name || 'N/A'}`);
-    lines.push(`Original file: ${currentComparison.originalDocument?.name || 'N/A'}`);
-    lines.push(`Proposed file: ${currentComparison.proposedDocument?.name || 'N/A'}`);
-    lines.push('');
-    lines.push('Cover note:');
-    lines.push(coverNote);
-    lines.push('');
+    const generatedAt = new Date();
+    const generatedIso = generatedAt.toISOString();
+    const generatedDisplay = generatedAt.toLocaleString();
+    const customerName = currentCustomer?.name || 'N/A';
+    const originalName = currentComparison.originalDocument?.name || 'N/A';
+    const proposedName = currentComparison.proposedDocument?.name || 'N/A';
+    const noteText = normalizeEmailText(coverNote || DEFAULT_NOTE).trim() || DEFAULT_NOTE;
 
-    currentComparison.differences.forEach((difference, index) => {
+    const exportRows: ExportRow[] = currentComparison.differences.map((difference, index) => {
       const response = responses.find((entry) => entry.changeId === difference.id);
       const risk = riskForChange(currentComparison.riskAnalyses, difference.id);
-      lines.push(`#${index + 1}`);
-      lines.push(`Type: ${difference.type}`);
-      lines.push(`Risk: ${risk?.riskLevel || 'unknown'}`);
-      if (risk?.manualOverride) {
-        lines.push('Risk source: manual override');
-      }
-      lines.push(`Response: ${response?.status || 'pending'}`);
-      lines.push(`Comment: ${response?.comment || '[none]'}`);
-      if (difference.originalText) lines.push(`Original: ${difference.originalText}`);
-      if (difference.proposedText) lines.push(`Proposed: ${difference.proposedText}`);
-      lines.push('');
+      return {
+        index: index + 1,
+        section: extractSectionForExport(difference),
+        changeParts: buildChangePartsForExport(difference),
+        risk: (risk?.riskLevel || 'unknown').toLowerCase(),
+        type: difference.type,
+        response: (response?.status || 'pending') as ChangeResponseStatus,
+        comment: normalizeEmailText(response?.comment || '').trim() || '-',
+      };
     });
 
-    const plainText = lines.join('\n');
+    const stats = {
+      total: exportRows.length,
+      accepted: exportRows.filter((row) => row.response === 'accepted').length,
+      countered: exportRows.filter((row) => row.response === 'countered').length,
+      rejected: exportRows.filter((row) => row.response === 'rejected').length,
+    };
+
+    const metadataRows: Array<[string, string, string, string]> = [
+      ['Customer', customerName, 'Original file', originalName],
+      ['Proposed file', proposedName, 'Generated', generatedDisplay],
+    ];
 
     if (exportFormat === 'email') {
-      const sanitizedBody = normalizeEmailText(plainText).replace(/\n/g, '\r\n');
+      const metadataHtml = metadataRows
+        .map(
+          (row) => `<tr>
+  <td style="padding:8px 10px;font-weight:700;color:#6B7280;border:1px solid #D1D5DB;">${escapeHtml(row[0])}</td>
+  <td style="padding:8px 10px;color:#111827;border:1px solid #D1D5DB;">${escapeHtml(row[1])}</td>
+  <td style="padding:8px 10px;font-weight:700;color:#6B7280;border:1px solid #D1D5DB;">${escapeHtml(row[2])}</td>
+  <td style="padding:8px 10px;color:#111827;border:1px solid #D1D5DB;">${escapeHtml(row[3])}</td>
+</tr>`
+        )
+        .join('');
+
+      const rowsHtml = exportRows
+        .map((row, rowIndex) => {
+          const risk = riskPalette(row.risk);
+          const response = responsePalette(row.response);
+          const rowBg = rowIndex % 2 === 0 ? '#FFFFFF' : '#F8FAFC';
+          const changeHtml = row.changeParts
+            .map((part) => {
+              const textColor = toneColor(part.tone);
+              const decoration = part.strike ? 'text-decoration:line-through;' : '';
+              return `<div style="margin-bottom:8px;">
+  <div style="font-size:11px;font-weight:700;color:#6B7280;">${escapeHtml(part.label)}:</div>
+  <div style="font-size:12px;line-height:1.45;color:#${textColor};${decoration}">${escapeHtml(part.text).replace(/\n/g, '<br/>')}</div>
+</div>`;
+            })
+            .join('');
+
+          return `<tr>
+  <td style="padding:8px;border:1px solid #D1D5DB;background:${rowBg};text-align:center;font-weight:700;color:#1B3A5C;">${row.index}</td>
+  <td style="padding:8px;border:1px solid #D1D5DB;background:${rowBg};font-weight:700;color:#111827;">${escapeHtml(row.section)}</td>
+  <td style="padding:8px;border:1px solid #D1D5DB;background:${rowBg};">${changeHtml}</td>
+  <td style="padding:8px;border:1px solid #D1D5DB;background:#${risk.bg};text-align:center;">
+    <div style="font-weight:700;color:#${risk.text};">${escapeHtml(row.risk.charAt(0).toUpperCase() + row.risk.slice(1))}</div>
+    <div style="font-size:11px;color:#${risk.text};">${escapeHtml(changeTypeLabel(row.type))}</div>
+  </td>
+  <td style="padding:8px;border:1px solid #D1D5DB;background:#${response.bg};text-align:center;font-weight:700;color:#${response.text};">${escapeHtml(responseLabel(row.response))}</td>
+  <td style="padding:8px;border:1px solid #D1D5DB;background:${rowBg};color:#111827;"><i>${escapeHtml(row.comment)}</i></td>
+</tr>`;
+        })
+        .join('');
+
+      const htmlBody = `<!doctype html><html><body style="margin:0;padding:20px;background:#F8FAFC;font-family:Segoe UI,Arial,sans-serif;color:#111827;">
+<div style="max-width:1280px;margin:0 auto;background:#FFFFFF;border:1px solid #D1D5DB;padding:20px;">
+  <h1 style="margin:0;color:#1B3A5C;font-size:32px;">Supplier Response</h1>
+  <p style="margin:8px 0 12px;color:#6B7280;">Framework Agreement Review &middot; ${escapeHtml(generatedIso.slice(0, 10))}</p>
+  <hr style="border:none;border-top:2px solid #1B3A5C;margin:0 0 16px;" />
+  <table style="width:100%;border-collapse:collapse;table-layout:fixed;margin-bottom:14px;"><colgroup><col style="width:14%" /><col style="width:36%" /><col style="width:14%" /><col style="width:36%" /></colgroup>${metadataHtml}</table>
+  <table style="width:100%;border-collapse:collapse;table-layout:fixed;margin-bottom:14px;"><tr>
+    <td style="padding:10px;border:1px solid #D1D5DB;background:#F1F5F9;text-align:center;"><div style="font-size:24px;font-weight:700;color:#1B3A5C;">${stats.total}</div><div style="font-size:12px;color:#1B3A5C;">Total</div></td>
+    <td style="padding:10px;border:1px solid #D1D5DB;background:#F0FDF4;text-align:center;"><div style="font-size:24px;font-weight:700;color:#15803D;">${stats.accepted}</div><div style="font-size:12px;color:#15803D;">Accepted</div></td>
+    <td style="padding:10px;border:1px solid #D1D5DB;background:#EFF6FF;text-align:center;"><div style="font-size:24px;font-weight:700;color:#1D4ED8;">${stats.countered}</div><div style="font-size:12px;color:#1D4ED8;">Counter-proposed</div></td>
+    <td style="padding:10px;border:1px solid #D1D5DB;background:#FEF2F2;text-align:center;"><div style="font-size:24px;font-weight:700;color:#BE123C;">${stats.rejected}</div><div style="font-size:12px;color:#BE123C;">Rejected</div></td>
+  </tr></table>
+  <div style="border-left:4px solid #1B3A5C;background:#EEF3F8;padding:10px 12px;margin-bottom:16px;color:#111827;"><i>${escapeHtml(noteText).replace(/\n/g, '<br/>')}</i></div>
+  <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+    <colgroup><col style="width:5%" /><col style="width:20%" /><col style="width:27%" /><col style="width:8%" /><col style="width:10%" /><col style="width:30%" /></colgroup>
+    <thead><tr>
+      <th style="padding:8px;border:1px solid #D1D5DB;background:#1B3A5C;color:#FFF;text-align:left;">#</th>
+      <th style="padding:8px;border:1px solid #D1D5DB;background:#1B3A5C;color:#FFF;text-align:left;">Section</th>
+      <th style="padding:8px;border:1px solid #D1D5DB;background:#1B3A5C;color:#FFF;text-align:left;">Change</th>
+      <th style="padding:8px;border:1px solid #D1D5DB;background:#1B3A5C;color:#FFF;text-align:left;">Risk</th>
+      <th style="padding:8px;border:1px solid #D1D5DB;background:#1B3A5C;color:#FFF;text-align:left;">Response</th>
+      <th style="padding:8px;border:1px solid #D1D5DB;background:#1B3A5C;color:#FFF;text-align:left;">Comment</th>
+    </tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</div></body></html>`;
+
       const emlContent = [
-        'Subject: Supplier Response Draft',
+        `Subject: Supplier Response - ${customerName}`,
         'MIME-Version: 1.0',
-        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Type: text/html; charset=UTF-8',
         'Content-Transfer-Encoding: 8bit',
         '',
-        sanitizedBody,
+        htmlBody,
       ].join('\r\n');
-      const emlBlob = new Blob([`\uFEFF${emlContent}`], {
-        type: 'message/rfc822;charset=utf-8',
-      });
+      const emlBlob = new Blob([emlContent], { type: 'message/rfc822;charset=utf-8' });
       downloadBlob(emlBlob, `supplier-response-${currentComparison.id}.eml`);
       setExportOpen(false);
       return;
     }
 
     if (exportFormat === 'pdf') {
-      const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
-      const margin = 40;
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'landscape' });
+      const margin = 28;
       const pageHeight = pdf.internal.pageSize.getHeight();
       const pageWidth = pdf.internal.pageSize.getWidth();
       const maxWidth = pageWidth - margin * 2;
-      const lineHeight = 14;
-      let y = 48;
+      const lineHeight = 11;
+      const cellPad = 6;
+      let y = margin;
 
-      const writeBlock = (text: string, bold = false) => {
-        const safeText = normalizeEmailText(text || '');
-        const chunks = pdf.splitTextToSize(safeText, maxWidth);
-        const projectedHeight = chunks.length * lineHeight;
-        if (y + projectedHeight > pageHeight - margin) {
-          pdf.addPage();
-          y = margin;
-        }
-        pdf.setFont('helvetica', bold ? 'bold' : 'normal');
-        pdf.text(chunks, margin, y);
-        y += projectedHeight + 4;
+      const hexToRgb = (hex: string): [number, number, number] => {
+        const h = hex.replace('#', '');
+        const n = h.length === 3 ? h.split('').map((c) => `${c}${c}`).join('') : h;
+        return [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)];
+      };
+      const setTextHex = (hex: string) => {
+        const [r, g, b] = hexToRgb(hex);
+        pdf.setTextColor(r, g, b);
+      };
+      const setFillHex = (hex: string) => {
+        const [r, g, b] = hexToRgb(hex);
+        pdf.setFillColor(r, g, b);
+      };
+      const setDrawHex = (hex: string) => {
+        const [r, g, b] = hexToRgb(hex);
+        pdf.setDrawColor(r, g, b);
       };
 
-      lines.forEach((line, index) => {
-        const isHeading = index === 0 || /^#\d+/.test(line) || line.endsWith(':');
-        writeBlock(line.length === 0 ? ' ' : line, isHeading);
+      const drawWrapped = (
+        text: string,
+        x: number,
+        yTop: number,
+        width: number,
+        color = '111827',
+        style: 'normal' | 'bold' | 'italic' = 'normal',
+        center = false
+      ): number => {
+        const lines = pdf.splitTextToSize(normalizeEmailText(text || ''), Math.max(16, width - cellPad * 2));
+        pdf.setFont('helvetica', style);
+        pdf.setFontSize(9);
+        setTextHex(color);
+        lines.forEach((line: string, i: number) => {
+          const ty = yTop + cellPad + lineHeight * (i + 1) - 2;
+          if (center) {
+            const tw = pdf.getTextWidth(line);
+            pdf.text(line, x + width / 2 - tw / 2, ty);
+          } else {
+            pdf.text(line, x + cellPad, ty);
+          }
+        });
+        return Math.max(1, lines.length);
+      };
+
+      const measureWrapped = (text: string, width: number): number =>
+        Math.max(
+          1,
+          pdf.splitTextToSize(normalizeEmailText(text || ''), Math.max(16, width - cellPad * 2)).length
+        );
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(28);
+      setTextHex('1B3A5C');
+      pdf.text('Supplier Response', margin, y + 24);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(11);
+      setTextHex('6B7280');
+      pdf.text(`Framework Agreement Review · ${generatedIso.slice(0, 10)}`, margin, y + 42);
+      setDrawHex('1B3A5C');
+      pdf.setLineWidth(1.2);
+      pdf.line(margin, y + 50, pageWidth - margin, y + 50);
+      y += 64;
+
+      const metaCols = [0.14, 0.36, 0.14, 0.36].map((w) => w * maxWidth);
+      metadataRows.forEach((row) => {
+        let x = margin;
+        row.forEach((cell, i) => {
+          setFillHex('FFFFFF');
+          setDrawHex('D1D5DB');
+          pdf.rect(x, y, metaCols[i], 26, 'FD');
+          drawWrapped(cell, x, y, metaCols[i], i % 2 === 0 ? '6B7280' : '111827', i % 2 === 0 ? 'bold' : 'normal');
+          x += metaCols[i];
+        });
+        y += 26;
+      });
+      y += 10;
+
+      const statCards = [
+        { label: 'Total', value: stats.total, text: '1B3A5C', bg: 'F1F5F9' },
+        { label: 'Accepted', value: stats.accepted, text: '15803D', bg: 'F0FDF4' },
+        { label: 'Counter-proposed', value: stats.countered, text: '1D4ED8', bg: 'EFF6FF' },
+        { label: 'Rejected', value: stats.rejected, text: 'BE123C', bg: 'FEF2F2' },
+      ];
+      const gap = 8;
+      const cardWidth = (maxWidth - gap * 3) / 4;
+      statCards.forEach((card, index) => {
+        const x = margin + index * (cardWidth + gap);
+        setFillHex(card.bg);
+        setDrawHex('D1D5DB');
+        pdf.rect(x, y, cardWidth, 62, 'FD');
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(22);
+        setTextHex(card.text);
+        const w = pdf.getTextWidth(String(card.value));
+        pdf.text(String(card.value), x + cardWidth / 2 - w / 2, y + 27);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(9);
+        const lw = pdf.getTextWidth(card.label);
+        pdf.text(card.label, x + cardWidth / 2 - lw / 2, y + 43);
+      });
+      y += 74;
+
+      const noteLines = pdf.splitTextToSize(noteText, maxWidth - 26);
+      const noteHeight = noteLines.length * lineHeight + 14;
+      setFillHex('EEF3F8');
+      setDrawHex('D1D5DB');
+      pdf.rect(margin, y, maxWidth, noteHeight, 'FD');
+      setDrawHex('1B3A5C');
+      pdf.setLineWidth(2);
+      pdf.line(margin + 1, y + 1, margin + 1, y + noteHeight - 1);
+      pdf.setFont('helvetica', 'italic');
+      pdf.setFontSize(9);
+      setTextHex('111827');
+      noteLines.forEach((line: string, i: number) => pdf.text(line, margin + 10, y + 12 + i * lineHeight));
+      y += noteHeight + 10;
+
+      const colWidths = [36, 150, 225, 72, 90, maxWidth - 36 - 150 - 225 - 72 - 90];
+      const drawHeaderRow = () => {
+        const headers = ['#', 'Section', 'Change', 'Risk', 'Response', 'Comment'];
+        let x = margin;
+        headers.forEach((header, i) => {
+          setFillHex('1B3A5C');
+          setDrawHex('D1D5DB');
+          pdf.rect(x, y, colWidths[i], 24, 'FD');
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(9);
+          setTextHex('FFFFFF');
+          pdf.text(header, x + cellPad, y + 15);
+          x += colWidths[i];
+        });
+        y += 24;
+      };
+      drawHeaderRow();
+
+      exportRows.forEach((row, idx) => {
+        const risk = riskPalette(row.risk);
+        const response = responsePalette(row.response);
+        const rowBg = idx % 2 === 0 ? 'FFFFFF' : 'F8FAFC';
+        const sectionH = measureWrapped(row.section, colWidths[1]) * lineHeight;
+        const changeText = row.changeParts.map((part) => `${part.label}: ${part.text}`).join('\n\n');
+        const changeH = measureWrapped(changeText, colWidths[2]) * lineHeight;
+        const riskH = measureWrapped(`${row.risk}\n${changeTypeLabel(row.type)}`, colWidths[3]) * lineHeight;
+        const responseH = measureWrapped(responseLabel(row.response), colWidths[4]) * lineHeight;
+        const commentH = measureWrapped(row.comment || '-', colWidths[5]) * lineHeight;
+        const rowHeight = Math.max(lineHeight, sectionH, changeH, riskH, responseH, commentH) + cellPad * 2;
+
+        if (y + rowHeight > pageHeight - margin) {
+          pdf.addPage();
+          y = margin;
+          drawHeaderRow();
+        }
+
+        let x = margin;
+        colWidths.forEach((w, i) => {
+          setFillHex(i === 3 ? risk.bg : i === 4 ? response.bg : rowBg);
+          setDrawHex('D1D5DB');
+          pdf.rect(x, y, w, rowHeight, 'FD');
+          x += w;
+        });
+
+        drawWrapped(String(row.index), margin, y, colWidths[0], '1B3A5C', 'bold', true);
+        drawWrapped(row.section, margin + colWidths[0], y, colWidths[1], '111827', 'bold');
+        drawWrapped(changeText, margin + colWidths[0] + colWidths[1], y, colWidths[2], '334155');
+        drawWrapped(
+          `${row.risk.charAt(0).toUpperCase() + row.risk.slice(1)}\n${changeTypeLabel(row.type)}`,
+          margin + colWidths[0] + colWidths[1] + colWidths[2],
+          y,
+          colWidths[3],
+          risk.text,
+          'bold',
+          true
+        );
+        drawWrapped(
+          responseLabel(row.response),
+          margin + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3],
+          y,
+          colWidths[4],
+          response.text,
+          'bold',
+          true
+        );
+        drawWrapped(
+          row.comment || '-',
+          margin + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3] + colWidths[4],
+          y,
+          colWidths[5],
+          '111827',
+          'italic'
+        );
+
+        y += rowHeight;
       });
 
       const pdfBlob = pdf.output('blob');
@@ -874,74 +1238,110 @@ function App() {
       return;
     }
 
-    const docRows = currentComparison.differences.map((difference, index) => {
-      const response = responses.find((entry) => entry.changeId === difference.id);
-      const risk = riskForChange(currentComparison.riskAnalyses, difference.id);
-      return {
-        index: index + 1,
-        type: difference.type,
-        risk: risk?.riskLevel || 'unknown',
-        response: response?.status || 'pending',
-        comment: response?.comment || '[none]',
-        original: difference.originalText || '',
-        proposed: difference.proposedText || '',
-      };
+    const cellBorders = {
+      top: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+      bottom: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+      left: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+      right: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+    };
+
+    const metadataTable = new Table({
+      width: { size: 13958, type: WidthType.DXA },
+      rows: metadataRows.map(
+        (row) =>
+          new TableRow({
+            children: [
+              new TableCell({ width: { size: 1800, type: WidthType.DXA }, borders: cellBorders, children: [new Paragraph({ children: [new TextRun({ text: row[0], bold: true, color: '6B7280', size: 18 })] })] }),
+              new TableCell({ width: { size: 5279, type: WidthType.DXA }, borders: cellBorders, children: [new Paragraph({ children: [new TextRun({ text: row[1], color: '111827', size: 18 })] })] }),
+              new TableCell({ width: { size: 1800, type: WidthType.DXA }, borders: cellBorders, children: [new Paragraph({ children: [new TextRun({ text: row[2], bold: true, color: '6B7280', size: 18 })] })] }),
+              new TableCell({ width: { size: 5079, type: WidthType.DXA }, borders: cellBorders, children: [new Paragraph({ children: [new TextRun({ text: row[3], color: '111827', size: 18 })] })] }),
+            ],
+          })
+      ),
     });
 
-    const docChildren: Paragraph[] = [
-      new Paragraph({
-        text: 'Supplier Response Export',
-        heading: HeadingLevel.HEADING_1,
-      }),
-      new Paragraph({
-        children: [new TextRun({ text: `Generated: ${new Date().toISOString()}` })],
-      }),
-      new Paragraph({
-        children: [new TextRun({ text: `Customer: ${currentCustomer?.name || 'N/A'}` })],
-      }),
-      new Paragraph({
-        children: [new TextRun({ text: `Original file: ${currentComparison.originalDocument?.name || 'N/A'}` })],
-      }),
-      new Paragraph({
-        children: [new TextRun({ text: `Proposed file: ${currentComparison.proposedDocument?.name || 'N/A'}` })],
-      }),
-      new Paragraph({ text: '' }),
-      new Paragraph({
-        text: 'Cover note',
-        heading: HeadingLevel.HEADING_2,
-      }),
-      new Paragraph({ text: coverNote || '' }),
-      new Paragraph({ text: '' }),
-      new Paragraph({
-        text: 'Changes',
-        heading: HeadingLevel.HEADING_2,
+    const statsTable = new Table({
+      width: { size: 13958, type: WidthType.DXA },
+      rows: [
+        new TableRow({
+          children: [
+            { label: 'Total', value: stats.total, text: '1B3A5C', bg: 'F1F5F9' },
+            { label: 'Accepted', value: stats.accepted, text: '15803D', bg: 'F0FDF4' },
+            { label: 'Counter-proposed', value: stats.countered, text: '1D4ED8', bg: 'EFF6FF' },
+            { label: 'Rejected', value: stats.rejected, text: 'BE123C', bg: 'FEF2F2' },
+          ].map((card) => new TableCell({
+            width: { size: 3489, type: WidthType.DXA },
+            borders: cellBorders,
+            shading: { fill: card.bg },
+            children: [
+              new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(card.value), bold: true, color: card.text, size: 48 })] }),
+              new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: card.label, color: card.text, size: 16 })] }),
+            ],
+          })),
+        }),
+      ],
+    });
+
+    const changeHeader = ['#', 'Section', 'Change', 'Risk', 'Response', 'Comment'];
+    const changeWidths = [600, 2800, 3600, 1000, 1358, 4600];
+    const changeRows: TableRow[] = [
+      new TableRow({
+        tableHeader: true,
+        children: changeHeader.map((header, index) => new TableCell({
+          width: { size: changeWidths[index], type: WidthType.DXA },
+          borders: cellBorders,
+          shading: { fill: '1B3A5C' },
+          children: [new Paragraph({ children: [new TextRun({ text: header, bold: true, color: 'FFFFFF', size: 18 })] })],
+        })),
       }),
     ];
 
-    docRows.forEach((row) => {
-      docChildren.push(
-        new Paragraph({
-          text: `#${row.index}`,
-          heading: HeadingLevel.HEADING_3,
-        }),
-        new Paragraph({ text: `Type: ${row.type}` }),
-        new Paragraph({ text: `Risk: ${row.risk}` }),
-        new Paragraph({ text: `Response: ${row.response}` }),
-        new Paragraph({ text: `Comment: ${row.comment}` })
-      );
-      if (row.original) {
-        docChildren.push(new Paragraph({ text: `Original: ${row.original}` }));
-      }
-      if (row.proposed) {
-        docChildren.push(new Paragraph({ text: `Proposed: ${row.proposed}` }));
-      }
-      docChildren.push(new Paragraph({ text: '' }));
+    exportRows.forEach((row, rowIndex) => {
+      const risk = riskPalette(row.risk);
+      const response = responsePalette(row.response);
+      const rowBg = rowIndex % 2 === 0 ? 'FFFFFF' : 'F8FAFC';
+      const changeChildren: Paragraph[] = [];
+      row.changeParts.forEach((part) => {
+        changeChildren.push(
+          new Paragraph({ spacing: { after: 20 }, children: [new TextRun({ text: `${part.label}:`, bold: true, color: '6B7280', size: 16 })] }),
+          new Paragraph({ spacing: { after: 80 }, children: [new TextRun({ text: part.text || '-', color: toneColor(part.tone), strike: !!part.strike, size: 16 })] })
+        );
+      });
+      if (changeChildren.length === 0) changeChildren.push(new Paragraph({ text: '-' }));
+
+      changeRows.push(new TableRow({
+        children: [
+          new TableCell({ width: { size: changeWidths[0], type: WidthType.DXA }, borders: cellBorders, shading: { fill: rowBg }, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(row.index), bold: true, color: '1B3A5C', size: 18 })] })] }),
+          new TableCell({ width: { size: changeWidths[1], type: WidthType.DXA }, borders: cellBorders, shading: { fill: rowBg }, children: [new Paragraph({ children: [new TextRun({ text: row.section, bold: true, color: '111827', size: 18 })] })] }),
+          new TableCell({ width: { size: changeWidths[2], type: WidthType.DXA }, borders: cellBorders, shading: { fill: rowBg }, children: changeChildren }),
+          new TableCell({ width: { size: changeWidths[3], type: WidthType.DXA }, borders: cellBorders, shading: { fill: risk.bg }, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: row.risk.charAt(0).toUpperCase() + row.risk.slice(1), bold: true, color: risk.text, size: 16 })] }), new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: changeTypeLabel(row.type), color: risk.text, size: 14 })] })] }),
+          new TableCell({ width: { size: changeWidths[4], type: WidthType.DXA }, borders: cellBorders, shading: { fill: response.bg }, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: responseLabel(row.response), bold: true, color: response.text, size: 16 })] })] }),
+          new TableCell({ width: { size: changeWidths[5], type: WidthType.DXA }, borders: cellBorders, shading: { fill: rowBg }, children: [new Paragraph({ children: [new TextRun({ text: row.comment || '-', italics: true, color: '111827', size: 18 })] })] }),
+        ],
+      }));
     });
 
     const docx = new DocxDocument({
       sections: [
         {
-          children: docChildren,
+          properties: { page: { size: { orientation: PageOrientation.LANDSCAPE } } },
+          children: [
+            new Paragraph({ spacing: { after: 80 }, children: [new TextRun({ text: 'Supplier Response', bold: true, color: '1B3A5C', size: 44 })] }),
+            new Paragraph({ spacing: { after: 120 }, children: [new TextRun({ text: `Framework Agreement Review · ${generatedIso.slice(0, 10)}`, color: '6B7280', size: 18 })] }),
+            metadataTable,
+            new Paragraph({ text: '' }),
+            statsTable,
+            new Paragraph({ text: '' }),
+            new Paragraph({
+              border: { left: { style: BorderStyle.SINGLE, size: 12, color: '1B3A5C' } },
+              shading: { fill: 'EEF3F8' },
+              indent: { left: 160 },
+              spacing: { before: 80, after: 80 },
+              children: [new TextRun({ text: noteText, italics: true, color: '111827', size: 18 })],
+            }),
+            new Paragraph({ text: '' }),
+            new Table({ width: { size: 13958, type: WidthType.DXA }, rows: changeRows }),
+          ],
         },
       ],
     });
@@ -1218,7 +1618,7 @@ function App() {
                       <td className="px-6 py-3 text-gray-700">{new Date(comparison.createdAt).toLocaleString()}</td>
                       <td className="px-6 py-3 text-gray-700">
                         <span
-                          className="inline-block max-w-[24rem] truncate align-bottom"
+                          className="inline-block max-w-[32rem] whitespace-normal break-all leading-5 align-bottom"
                           title={comparison.proposedDocument?.name || 'N/A'}
                         >
                           {comparison.proposedDocument?.name || 'N/A'}
@@ -1277,6 +1677,10 @@ function App() {
     const submittedResponse = responses.find((entry) => entry.changeId === selectedDifference.id) || null;
     const requiresComment = draftStatus === 'countered' || draftStatus === 'rejected';
     const canSave = !!draftStatus && (!requiresComment || !!draftComment.trim()) && !savingResponse;
+    const analysisPercent =
+      analysisProgress.total > 0
+        ? Math.max(0, Math.min(100, Math.round((analysisProgress.completed / analysisProgress.total) * 100)))
+        : 0;
 
     const inlineHtml = generateInlineDiffHTML(
       currentComparison.originalDocument?.text || '',
@@ -1288,7 +1692,7 @@ function App() {
       currentComparison.originalDocument?.text || '',
       currentComparison.proposedDocument?.text || ''
     );
-    const selectedContextHtml = generateDiffHTML(
+    const selectedContextInlineHtml = generateInlineDiffHTML(
       selectedContext.original || '',
       selectedContext.proposed || '',
       'word'
@@ -1316,9 +1720,31 @@ function App() {
           </div>
 
           {isAnalyzing && (
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
-              <p className="text-sm text-gray-600">Running risk analysis {analysisProgress.completed}/{analysisProgress.total}</p>
+            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                  <p className="text-sm font-medium text-gray-700">Running risk analysis</p>
+                </div>
+                <div className="inline-flex items-center gap-2">
+                  <span className="text-xs font-semibold text-gray-600 tabular-nums">
+                    {analysisProgress.completed}/{analysisProgress.total}
+                  </span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 tabular-nums">
+                    {analysisPercent}%
+                  </span>
+                </div>
+              </div>
+              <div className="mt-3 h-2.5 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-400 transition-all duration-500 ease-out shadow-[0_0_8px_rgba(59,130,246,0.45)]"
+                  style={{ width: `${analysisPercent}%` }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                <span>Preparing legal risk summary</span>
+                <span>Auto-run enabled</span>
+              </div>
             </div>
           )}
 
@@ -1547,9 +1973,9 @@ function App() {
             <div className="relative w-full max-w-5xl max-h-[85vh] rounded-lg shadow-2xl border border-gray-200 bg-white flex flex-col">
               <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-semibold text-gray-800">Change Context</h3>
+                  <h3 className="font-semibold text-gray-800">Expanded Context</h3>
                   <p className="text-sm text-gray-500">
-                    Section-level context for change {reviewIndex + 1}
+                    Surrounding section context for change {reviewIndex + 1}
                   </p>
                 </div>
                 <button
@@ -1560,41 +1986,25 @@ function App() {
                 </button>
               </div>
               <div className="flex-1 overflow-auto p-6">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="border border-gray-200 rounded overflow-hidden">
-                    <div className="px-4 py-2 border-b border-gray-100 bg-gray-50">
-                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Original context
-                      </p>
-                    </div>
-                    <div className="p-4">
-                      {selectedContext.original ? (
-                        <div
-                          className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
-                          dangerouslySetInnerHTML={{ __html: selectedContextHtml.originalHTML }}
-                        />
-                      ) : (
-                        <p className="text-sm text-gray-500 font-mono">[No original context available]</p>
-                      )}
+                <div className="border border-gray-200 rounded overflow-hidden">
+                  <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Expanded context with highlights
+                    </p>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className="px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700">Added</span>
+                      <span className="px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-700">Removed</span>
                     </div>
                   </div>
-
-                  <div className="border border-gray-200 rounded overflow-hidden">
-                    <div className="px-4 py-2 border-b border-gray-100 bg-gray-50">
-                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Proposed context
-                      </p>
-                    </div>
-                    <div className="p-4">
-                      {selectedContext.proposed ? (
-                        <div
-                          className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
-                          dangerouslySetInnerHTML={{ __html: selectedContextHtml.proposedHTML }}
-                        />
-                      ) : (
-                        <p className="text-sm text-gray-500 font-mono">[No proposed context available]</p>
-                      )}
-                    </div>
+                  <div className="p-4">
+                    {selectedContext.original || selectedContext.proposed ? (
+                      <div
+                        className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
+                        dangerouslySetInnerHTML={{ __html: selectedContextInlineHtml }}
+                      />
+                    ) : (
+                      <p className="text-sm text-gray-500 font-mono">[No context available for this change]</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1855,7 +2265,7 @@ function FileNamePill({ label, value }: FileNamePillProps) {
   return (
     <div className="border border-gray-200 rounded bg-white px-3 py-2 min-w-0">
       <p className="text-[11px] uppercase tracking-wide text-gray-400">{label}</p>
-      <p className="text-sm text-gray-700 truncate" title={value}>
+      <p className="text-sm text-gray-700 whitespace-normal break-all leading-5" title={value}>
         {value}
       </p>
     </div>
