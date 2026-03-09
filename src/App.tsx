@@ -226,6 +226,97 @@ function riskLevelForChange(risks: RiskAnalysis[], changeId: string): 'low' | 'm
   return risk?.riskLevel || 'medium';
 }
 
+function normalizeContextSection(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '[Not available]') return null;
+  return trimmed;
+}
+
+function parseDifferenceContextSections(context: string): {
+  original: string | null;
+  proposed: string | null;
+} {
+  if (!context || !context.trim()) {
+    return { original: null, proposed: null };
+  }
+
+  const originalMatch = context.match(
+    /Original section context:\n([\s\S]*?)(?:\n\nProposed section context:\n|$)/
+  );
+  const proposedMatch = context.match(/Proposed section context:\n([\s\S]*)$/);
+
+  return {
+    original: normalizeContextSection(originalMatch?.[1] ?? null),
+    proposed: normalizeContextSection(proposedMatch?.[1] ?? null),
+  };
+}
+
+function clampPosition(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function extractContextWindow(
+  text: string,
+  position: Difference['originalPosition'] | Difference['proposedPosition'] | undefined,
+  maxChars = 1800
+): string | null {
+  const source = text || '';
+  if (!source.trim()) return null;
+
+  if (!position) {
+    return source.slice(0, maxChars).trim() || null;
+  }
+
+  const safeStart = clampPosition(position.start, 0, source.length);
+  const safeEnd = clampPosition(position.end, safeStart, source.length);
+  const before = Math.floor(maxChars * 0.45);
+  const after = Math.floor(maxChars * 0.55);
+  let sliceStart = clampPosition(safeStart - before, 0, source.length);
+  let sliceEnd = clampPosition(safeEnd + after, sliceStart, source.length);
+
+  if (sliceStart > 0) {
+    const nextNewline = source.indexOf('\n', sliceStart);
+    if (nextNewline > sliceStart && nextNewline < sliceStart + 240) {
+      sliceStart = nextNewline + 1;
+    }
+  }
+
+  if (sliceEnd < source.length) {
+    const previousNewline = source.lastIndexOf('\n', sliceEnd);
+    if (previousNewline > sliceEnd - 240) {
+      sliceEnd = previousNewline;
+    }
+  }
+
+  const section = source.slice(sliceStart, sliceEnd).trim();
+  return section || null;
+}
+
+function getDifferenceContextSections(
+  difference: Difference,
+  originalDocumentText: string,
+  proposedDocumentText: string
+): {
+  original: string | null;
+  proposed: string | null;
+} {
+  const parsed = parseDifferenceContextSections(difference.context || '');
+  const fallbackOriginal = extractContextWindow(
+    originalDocumentText,
+    difference.originalPosition
+  );
+  const fallbackProposed = extractContextWindow(
+    proposedDocumentText,
+    difference.proposedPosition
+  );
+
+  return {
+    original: parsed.original || fallbackOriginal,
+    proposed: parsed.proposed || fallbackProposed,
+  };
+}
+
 function App() {
   const [pathState, setPathState] = useState({
     pathname: window.location.pathname,
@@ -270,6 +361,7 @@ function App() {
     Record<string, Array<{ question: string; answer: string; askedAt: Date }>>
   >({});
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf');
   const [coverNote, setCoverNote] = useState(DEFAULT_NOTE);
@@ -1191,6 +1283,11 @@ function App() {
       currentComparison.proposedDocument?.text || '',
       'word'
     );
+    const selectedContext = getDifferenceContextSections(
+      selectedDifference,
+      currentComparison.originalDocument?.text || '',
+      currentComparison.proposedDocument?.text || ''
+    );
 
     return (
       <div className="px-8 py-6 bg-gray-50 h-full overflow-auto">
@@ -1255,6 +1352,14 @@ function App() {
                   </div>
                 </>
               )}
+              <div className="pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => setContextOpen(true)}
+                  className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                >
+                  View Context
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1426,6 +1531,65 @@ function App() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {contextOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setContextOpen(false)} />
+            <div className="relative w-full max-w-5xl max-h-[85vh] rounded-lg shadow-2xl border border-gray-200 bg-white flex flex-col">
+              <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold text-gray-800">Change Context</h3>
+                  <p className="text-sm text-gray-500">
+                    Section-level context for change {reviewIndex + 1}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setContextOpen(false)}
+                  className="p-1 rounded hover:bg-gray-100"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto p-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="border border-gray-200 rounded overflow-hidden">
+                    <div className="px-4 py-2 border-b border-gray-100 bg-gray-50">
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Original context
+                      </p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
+                        {selectedContext.original || '[No original context available]'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="border border-gray-200 rounded overflow-hidden">
+                    <div className="px-4 py-2 border-b border-gray-100 bg-gray-50">
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Proposed context
+                      </p>
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
+                        {selectedContext.proposed || '[No proposed context available]'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 flex justify-end">
+                <button
+                  onClick={() => setContextOpen(false)}
+                  className="h-9 px-3 border border-gray-200 text-gray-600 text-sm font-medium rounded hover:bg-gray-50"
+                >
+                  Close
+                </button>
               </div>
             </div>
           </div>
