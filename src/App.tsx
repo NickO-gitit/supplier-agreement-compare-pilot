@@ -117,6 +117,7 @@ function responseChipClass(status: ChangeResponseStatus): string {
   if (status === 'accepted') return 'bg-green-50 text-green-700';
   if (status === 'countered') return 'bg-blue-50 text-blue-700';
   if (status === 'rejected') return 'bg-red-50 text-red-700';
+  if (status === 'ignored') return 'bg-slate-100 text-slate-700';
   return 'text-gray-400';
 }
 
@@ -124,6 +125,7 @@ function responseLabel(status: ChangeResponseStatus): string {
   if (status === 'accepted') return 'Accepted';
   if (status === 'countered') return 'Counter-proposed';
   if (status === 'rejected') return 'Rejected';
+  if (status === 'ignored') return 'Ignored';
   return 'Pending';
 }
 
@@ -1055,18 +1057,25 @@ function App() {
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                     <ActionChoice label="✓ Accept" active={draftStatus === 'accepted'} activeClass="bg-emerald-600 border-emerald-600 text-white" idleClass="border border-gray-200 text-gray-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700" onClick={() => setDraftStatus((v) => v === 'accepted' ? null : 'accepted')} />
                     <ActionChoice label="↩ Counter-propose" active={draftStatus === 'countered'} activeClass="bg-blue-600 border-blue-600 text-white" idleClass="border border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700" onClick={() => setDraftStatus((v) => v === 'countered' ? null : 'countered')} />
                     <ActionChoice label="✕ Reject" active={draftStatus === 'rejected'} activeClass="bg-red-600 border-red-600 text-white" idleClass="border border-gray-200 text-gray-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700" onClick={() => setDraftStatus((v) => v === 'rejected' ? null : 'rejected')} />
+                    <ActionChoice label="⊘ Ignore" active={draftStatus === 'ignored'} activeClass="bg-slate-600 border-slate-600 text-white" idleClass="border border-gray-200 text-gray-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700" onClick={() => setDraftStatus((v) => v === 'ignored' ? null : 'ignored')} />
                   </div>
 
                   {draftStatus && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        {draftStatus === 'countered' ? 'Counter-proposal comment *' : draftStatus === 'rejected' ? 'Rejection reason *' : 'Optional note'}
+                        {draftStatus === 'countered'
+                          ? 'Counter-proposal comment *'
+                          : draftStatus === 'rejected'
+                          ? 'Rejection reason *'
+                          : draftStatus === 'ignored'
+                          ? 'Optional reason for ignoring'
+                          : 'Optional note'}
                       </label>
-                      <textarea value={draftComment} onChange={(e) => setDraftComment(e.target.value)} rows={4} className="w-full rounded border border-gray-300 px-3 py-2 text-sm" placeholder={draftStatus === 'countered' ? 'Describe the alternative wording you propose...' : draftStatus === 'rejected' ? 'Explain why this change cannot be accepted...' : 'Optional note to the supplier...'} />
+                      <textarea value={draftComment} onChange={(e) => setDraftComment(e.target.value)} rows={4} className="w-full rounded border border-gray-300 px-3 py-2 text-sm" placeholder={draftStatus === 'countered' ? 'Describe the alternative wording you propose...' : draftStatus === 'rejected' ? 'Explain why this change cannot be accepted...' : draftStatus === 'ignored' ? 'Optional note on why this change is being ignored (for example formatting-only change).' : 'Optional note to the supplier...'} />
                     </div>
                   )}
 
@@ -1127,11 +1136,12 @@ function App() {
                 </p>
               </div>
               <div className="px-6 py-4 space-y-4">
-                <div className="grid grid-cols-4 gap-1 sm:gap-2 text-center text-xs">
+                <div className="grid grid-cols-5 gap-1 sm:gap-2 text-center text-xs">
                   <StatCell label="Total" value={String(reviewDiffs.length)} />
                   <StatCell label="Accepted" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'accepted').length)} />
                   <StatCell label="Countered" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'countered').length)} />
                   <StatCell label="Rejected" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'rejected').length)} />
+                  <StatCell label="Ignored" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'ignored').length)} />
                 </div>
                 {reviewedCount < reviewDiffs.length && <div className="rounded border border-amber-200 bg-amber-50 text-amber-700 text-xs px-3 py-2">{reviewDiffs.length - reviewedCount} changes remain pending.</div>}
                 <div>
@@ -1239,7 +1249,7 @@ function App() {
           {route.type === 'review' && currentComparison && (
             <div className="mt-4 space-y-3">
               <div>
-                <div className="h-1 w-full rounded bg-gray-800 overflow-hidden flex">{reviewSegments.map((segment) => <span key={segment.id} className={`h-full flex-1 ${segment.status === 'accepted' ? 'bg-emerald-400' : segment.status === 'countered' ? 'bg-blue-400' : segment.status === 'rejected' ? 'bg-red-400' : 'bg-gray-600'}`} />)}</div>
+                <div className="h-1 w-full rounded bg-gray-800 overflow-hidden flex">{reviewSegments.map((segment) => <span key={segment.id} className={`h-full flex-1 ${segment.status === 'accepted' ? 'bg-emerald-400' : segment.status === 'countered' ? 'bg-blue-400' : segment.status === 'rejected' ? 'bg-red-400' : segment.status === 'ignored' ? 'bg-slate-400' : 'bg-gray-600'}`} />)}</div>
                 <p className="text-xs text-gray-500 mt-2">{reviewedCount} of {currentComparison.differences.length} reviewed</p>
               </div>
               <div className="space-y-1">
@@ -1247,7 +1257,7 @@ function App() {
                   const state = responseForChange(responses, difference.id);
                   const level = riskLevelForChange(currentComparison.riskAnalyses, difference.id);
                   const active = index === reviewIndex;
-                  return <button key={difference.id} onClick={() => setReviewIndex(index)} className={`w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-xs flex items-center gap-2 ${active ? 'bg-gray-700 text-white' : ''}`}><span className={`w-2 h-2 rounded-full ${level === 'high' ? 'bg-red-400' : level === 'medium' ? 'bg-amber-400' : 'bg-emerald-400'}`} /><span className="truncate flex-1">{difference.context || `Change ${index + 1}`}</span><span>{state === 'accepted' ? '✓' : state === 'countered' ? '↩' : state === 'rejected' ? '✕' : '○'}</span></button>;
+                  return <button key={difference.id} onClick={() => setReviewIndex(index)} className={`w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-xs flex items-center gap-2 ${active ? 'bg-gray-700 text-white' : ''}`}><span className={`w-2 h-2 rounded-full ${level === 'high' ? 'bg-red-400' : level === 'medium' ? 'bg-amber-400' : 'bg-emerald-400'}`} /><span className="truncate flex-1">{difference.context || `Change ${index + 1}`}</span><span>{state === 'accepted' ? '✓' : state === 'countered' ? '↩' : state === 'rejected' ? '✕' : state === 'ignored' ? '⊘' : '○'}</span></button>;
                 })}
               </div>
             </div>

@@ -114,7 +114,7 @@ export interface Customer {
   createdAt: Date;
 }
 
-export type ChangeResponseStatus = 'pending' | 'accepted' | 'countered' | 'rejected';
+export type ChangeResponseStatus = 'pending' | 'accepted' | 'countered' | 'rejected' | 'ignored';
 
 export interface ChangeResponse {
   id: string;
