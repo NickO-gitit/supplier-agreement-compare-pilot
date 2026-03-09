@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { loadTenantConfig } from './loadTenantConfig.mjs';
+import { getStorageSnapshot, setStorageValue } from './dataStore.mjs';
 
 const require = createRequire(import.meta.url);
 const analyzeRiskHandler = require('../api/analyze-risk/index.js');
@@ -59,6 +60,37 @@ const server = createServer(async (req, res) => {
 
     if (pathname === '/api/risk-followup') {
       return handleFunctionRequest(req, res, riskFollowupHandler);
+    }
+
+    if (pathname === '/api/storage') {
+      if (method === 'GET') {
+        const snapshot = await getStorageSnapshot();
+        return sendJson(res, 200, snapshot);
+      }
+
+      if (method !== 'POST') {
+        return sendJson(res, 405, { error: 'Method not allowed. Use GET or POST.' });
+      }
+
+      const bodyText = await readRequestBody(req);
+      const body = bodyText ? tryParseJson(bodyText) : null;
+      if (!body || typeof body !== 'object') {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+      }
+
+      const key = typeof body.key === 'string' ? body.key : '';
+      const value =
+        body.value === null || typeof body.value === 'string' ? body.value : undefined;
+
+      if (!key) {
+        return sendJson(res, 400, { error: 'Key is required.' });
+      }
+      if (value === undefined) {
+        return sendJson(res, 400, { error: 'Value must be a string or null.' });
+      }
+
+      await setStorageValue(key, value);
+      return sendJson(res, 200, { ok: true });
     }
 
     if (pathname.startsWith('/api/')) {

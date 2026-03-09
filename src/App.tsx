@@ -29,6 +29,7 @@ import {
   createCustomer,
   deriveInitials,
   generateId,
+  hydrateFromBackend,
   getChangeResponsesForComparison,
   getComparisons,
   getCustomers,
@@ -242,6 +243,24 @@ function App() {
     const onPopState = () => setPathState({ pathname: window.location.pathname, search: window.location.search });
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const runHydration = async () => {
+      await hydrateFromBackend();
+      if (!active) return;
+      setCustomers(getCustomers());
+      setComparisons(getComparisons());
+      setDefaultOriginal(getDefaultOriginalAgreement());
+    };
+
+    void runHydration();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {

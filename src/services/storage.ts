@@ -15,6 +15,7 @@ const LEGACY_API_CONFIG_KEYS = ['supplier-agreement-config', 'openai-config'];
 const CUSTOMERS_KEY = 'supplier-agreement-customers';
 const CHANGE_RESPONSES_KEY = 'supplier-agreement-change-responses';
 const DEFAULT_ORIGINAL_KEY = 'supplier-agreement-default-original';
+const BACKEND_STORAGE_URL = '/api/storage';
 const CUSTOMER_COLORS: CustomerColor[] = ['blue', 'emerald', 'violet', 'orange', 'rose', 'cyan'];
 
 function parseDate(value: unknown): Date {
@@ -43,6 +44,7 @@ export function saveComparison(comparison: Comparison): void {
   // Keep only last 50 comparisons
   const trimmed = comparisons.slice(0, 50);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+  syncKeyToBackend(STORAGE_KEY);
 }
 
 export function getComparisons(): Comparison[] {
@@ -96,6 +98,7 @@ export function deleteComparison(id: string): void {
   const comparisons = getComparisons();
   const filtered = comparisons.filter((c) => c.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+  syncKeyToBackend(STORAGE_KEY);
 
   // Also delete associated notes
   deleteNotesForComparison(id);
@@ -115,6 +118,7 @@ export function saveNote(comparisonId: string, note: Note): void {
 
   allNotes[comparisonId] = comparisonNotes;
   localStorage.setItem(NOTES_KEY, JSON.stringify(allNotes));
+  syncKeyToBackend(NOTES_KEY);
 }
 
 export function getNotesForComparison(comparisonId: string): Note[] {
@@ -133,12 +137,14 @@ export function deleteNote(comparisonId: string, noteId: string): void {
   const comparisonNotes = allNotes[comparisonId] || [];
   allNotes[comparisonId] = comparisonNotes.filter((n) => n.id !== noteId);
   localStorage.setItem(NOTES_KEY, JSON.stringify(allNotes));
+  syncKeyToBackend(NOTES_KEY);
 }
 
 export function deleteNotesForComparison(comparisonId: string): void {
   const allNotes = getAllNotes();
   delete allNotes[comparisonId];
   localStorage.setItem(NOTES_KEY, JSON.stringify(allNotes));
+  syncKeyToBackend(NOTES_KEY);
 }
 
 function getAllNotes(): Record<string, Note[]> {
@@ -166,6 +172,8 @@ export function saveAPIConfig(config: APIConfig): void {
   localStorage.setItem(API_CONFIG_KEY, serialized);
   // Write-through to legacy key for backwards compatibility across older builds.
   localStorage.setItem(LEGACY_API_CONFIG_KEYS[0], serialized);
+  syncKeyToBackend(API_CONFIG_KEY);
+  syncKeyToBackend(LEGACY_API_CONFIG_KEYS[0]);
 }
 
 export function getAPIConfig(): APIConfig | null {
@@ -187,8 +195,10 @@ export function getAPIConfig(): APIConfig | null {
 
 export function clearAPIConfig(): void {
   localStorage.removeItem(API_CONFIG_KEY);
+  syncValueToBackend(API_CONFIG_KEY, null);
   for (const key of LEGACY_API_CONFIG_KEYS) {
     localStorage.removeItem(key);
+    syncValueToBackend(key, null);
   }
 }
 
@@ -225,6 +235,7 @@ export function saveCustomer(customer: Customer): void {
     customers.push(customer);
   }
   localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+  syncKeyToBackend(CUSTOMERS_KEY);
 }
 
 export function createCustomer(name: string, initialsOverride?: string): Customer {
@@ -283,6 +294,7 @@ function getAllChangeResponses(): Record<string, ChangeResponse[]> {
 
 function saveAllChangeResponses(payload: Record<string, ChangeResponse[]>): void {
   localStorage.setItem(CHANGE_RESPONSES_KEY, JSON.stringify(payload));
+  syncKeyToBackend(CHANGE_RESPONSES_KEY);
 }
 
 export function getChangeResponsesForComparison(comparisonId: string): ChangeResponse[] {
@@ -344,6 +356,7 @@ export function clearChangeResponse(comparisonId: string, changeId: string): voi
 
 export function saveDefaultOriginalAgreement(document: DefaultOriginalAgreement): void {
   localStorage.setItem(DEFAULT_ORIGINAL_KEY, JSON.stringify(document));
+  syncKeyToBackend(DEFAULT_ORIGINAL_KEY);
 }
 
 export function getDefaultOriginalAgreement(): DefaultOriginalAgreement | null {
@@ -362,6 +375,55 @@ export function getDefaultOriginalAgreement(): DefaultOriginalAgreement | null {
 
 export function clearDefaultOriginalAgreement(): void {
   localStorage.removeItem(DEFAULT_ORIGINAL_KEY);
+  syncValueToBackend(DEFAULT_ORIGINAL_KEY, null);
+}
+
+export async function hydrateFromBackend(): Promise<void> {
+  if (typeof window === 'undefined' || typeof fetch === 'undefined') {
+    return;
+  }
+
+  try {
+    const response = await fetch(BACKEND_STORAGE_URL, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      return;
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+
+    Object.entries(data).forEach(([key, value]) => {
+      if (typeof value === 'string') {
+        localStorage.setItem(key, value);
+      }
+    });
+  } catch {
+    // Backend unavailable, continue with local browser cache.
+  }
+}
+
+function syncKeyToBackend(key: string): void {
+  const value = localStorage.getItem(key);
+  syncValueToBackend(key, value);
+}
+
+function syncValueToBackend(key: string, value: string | null): void {
+  if (typeof window === 'undefined' || typeof fetch === 'undefined') {
+    return;
+  }
+
+  void fetch(BACKEND_STORAGE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  }).catch(() => {
+    // Ignore transient sync errors.
+  });
 }
 
 // Generate unique IDs
