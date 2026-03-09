@@ -5,6 +5,7 @@ export interface Document {
   fileType: string;
   text: string;
   uploadedAt: Date;
+  sizeBytes?: number;
 }
 
 export interface Difference {
@@ -80,6 +81,7 @@ export interface Note {
 
 export interface Comparison {
   id: string;
+  customerId: string;
   originalDocument: Document | null;
   proposedDocument: Document | null;
   differences: Difference[];
@@ -87,8 +89,9 @@ export interface Comparison {
   groupingReviews: GroupingReview[];
   groupingActionLogs: GroupingActionLog[];
   notes: Note[];
+  changeResponses?: ChangeResponse[];
   createdAt: Date;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'pending_review' | 'reviewed';
 }
 
 export interface ComparisonSummary {
@@ -99,4 +102,35 @@ export interface ComparisonSummary {
   highRiskCount: number;
   mediumRiskCount: number;
   lowRiskCount: number;
+}
+
+export type CustomerColor = 'blue' | 'emerald' | 'violet' | 'orange' | 'rose' | 'cyan';
+
+export interface Customer {
+  id: string;
+  name: string;
+  color: CustomerColor;
+  initials: string;
+  createdAt: Date;
+}
+
+export type ChangeResponseStatus = 'pending' | 'accepted' | 'countered' | 'rejected';
+
+export interface ChangeResponse {
+  id: string;
+  comparisonId: string;
+  changeId: string;
+  status: ChangeResponseStatus;
+  comment: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface DefaultOriginalAgreement {
+  id: string;
+  name: string;
+  fileType: string;
+  text: string;
+  sizeBytes?: number;
+  uploadedAt: Date;
 }
