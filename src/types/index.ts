@@ -22,6 +22,10 @@ export interface RiskAnalysis {
   differenceId: string;
   riskLevel: 'low' | 'medium' | 'high';
   category: string;
+  manualOverride?: boolean;
+  manualOverrideAt?: Date;
+  autoRiskLevel?: 'low' | 'medium' | 'high';
+  autoCategory?: string;
   explanation: string;
   legalImplication: string;
   recommendation: string;

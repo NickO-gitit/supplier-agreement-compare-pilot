@@ -197,6 +197,30 @@ function riskForChange(risks: RiskAnalysis[], changeId: string): RiskAnalysis | 
   return risks.find((entry) => entry.differenceId === changeId) || null;
 }
 
+function preserveManualRiskOverrides(
+  existingRisks: RiskAnalysis[],
+  newRisks: RiskAnalysis[]
+): RiskAnalysis[] {
+  const existingById = new Map(existingRisks.map((risk) => [risk.differenceId, risk]));
+
+  return newRisks.map((risk) => {
+    const existing = existingById.get(risk.differenceId);
+    if (!existing?.manualOverride) {
+      return risk;
+    }
+
+    return {
+      ...risk,
+      riskLevel: existing.riskLevel,
+      category: existing.category,
+      manualOverride: true,
+      manualOverrideAt: existing.manualOverrideAt || new Date(),
+      autoRiskLevel: risk.riskLevel,
+      autoCategory: risk.category,
+    };
+  });
+}
+
 function riskLevelForChange(risks: RiskAnalysis[], changeId: string): 'low' | 'medium' | 'high' {
   const risk = risks.find((entry) => entry.differenceId === changeId && entry.status !== 'error');
   return risk?.riskLevel || 'medium';
@@ -481,12 +505,18 @@ function App() {
       setAnalysisProgress({ completed: 0, total: comparison.differences.length });
 
       try {
-        const risks = await analyzeAllRisks(comparison.differences, (completed, total) => {
+        const analyzedRisks = await analyzeAllRisks(comparison.differences, (completed, total) => {
           setAnalysisProgress({ completed, total });
         });
+        const currentComparisonState =
+          getComparisons().find((entry) => entry.id === comparison.id) || comparison;
+        const risks = preserveManualRiskOverrides(
+          currentComparisonState.riskAnalyses || [],
+          analyzedRisks
+        );
 
         upsertComparison({
-          ...comparison,
+          ...currentComparisonState,
           riskAnalyses: risks,
         });
         setDisclaimerComparisonId(comparison.id);
@@ -565,6 +595,85 @@ function App() {
     }
   }, [currentComparison, draftComment, draftStatus, reviewIndex, selectedDifference, upsertComparison]);
 
+  const setManualRiskClassification = useCallback(
+    (differenceId: string, level: 'low' | 'medium' | 'high') => {
+      if (!currentComparison) return;
+
+      const now = new Date();
+      const existingRisk = currentComparison.riskAnalyses.find(
+        (entry) => entry.differenceId === differenceId
+      );
+      const difference = currentComparison.differences.find((entry) => entry.id === differenceId);
+
+      let nextRisks: RiskAnalysis[];
+      if (existingRisk) {
+        nextRisks = currentComparison.riskAnalyses.map((entry) => {
+          if (entry.differenceId !== differenceId) return entry;
+          return {
+            ...entry,
+            riskLevel: level,
+            manualOverride: true,
+            manualOverrideAt: now,
+            autoRiskLevel: entry.autoRiskLevel || entry.riskLevel,
+            autoCategory: entry.autoCategory || entry.category,
+          };
+        });
+      } else {
+        nextRisks = [
+          ...currentComparison.riskAnalyses,
+          {
+            differenceId,
+            riskLevel: level,
+            category: 'Manual classification',
+            explanation: difference?.context || 'Manual classification applied.',
+            legalImplication: 'Manual risk classification applied by reviewer.',
+            recommendation: 'Use reviewer judgement for this change.',
+            analyzedAt: now,
+            status: 'ok',
+            manualOverride: true,
+            manualOverrideAt: now,
+          },
+        ];
+      }
+
+      upsertComparison({
+        ...currentComparison,
+        riskAnalyses: nextRisks,
+      });
+    },
+    [currentComparison, upsertComparison]
+  );
+
+  const clearManualRiskClassification = useCallback(
+    (differenceId: string) => {
+      if (!currentComparison) return;
+
+      const hasManual = currentComparison.riskAnalyses.some(
+        (entry) => entry.differenceId === differenceId && entry.manualOverride
+      );
+      if (!hasManual) return;
+
+      const nextRisks = currentComparison.riskAnalyses.map((entry) => {
+        if (entry.differenceId !== differenceId || !entry.manualOverride) return entry;
+        return {
+          ...entry,
+          riskLevel: entry.autoRiskLevel || entry.riskLevel,
+          category: entry.autoCategory || entry.category,
+          manualOverride: false,
+          manualOverrideAt: undefined,
+          autoRiskLevel: undefined,
+          autoCategory: undefined,
+        };
+      });
+
+      upsertComparison({
+        ...currentComparison,
+        riskAnalyses: nextRisks,
+      });
+    },
+    [currentComparison, upsertComparison]
+  );
+
   const askRisk = useCallback(async () => {
     if (!selectedDifference || !selectedRisk) return;
     const question = askQuestion.trim();
@@ -610,6 +719,9 @@ function App() {
       lines.push(`#${index + 1}`);
       lines.push(`Type: ${difference.type}`);
       lines.push(`Risk: ${risk?.riskLevel || 'unknown'}`);
+      if (risk?.manualOverride) {
+        lines.push('Risk source: manual override');
+      }
       lines.push(`Response: ${response?.status || 'pending'}`);
       lines.push(`Comment: ${response?.comment || '[none]'}`);
       if (difference.originalText) lines.push(`Original: ${difference.originalText}`);
@@ -1068,6 +1180,7 @@ function App() {
 
     const status = responseForChange(responses, selectedDifference.id);
     const riskLevel = riskLevelForChange(reviewRisks, selectedDifference.id);
+    const manualRiskOverride = !!selectedRisk?.manualOverride;
     const followUps = answersByChange[selectedDifference.id] || [];
     const submittedResponse = responses.find((entry) => entry.changeId === selectedDifference.id) || null;
     const requiresComment = draftStatus === 'countered' || draftStatus === 'rejected';
@@ -1148,7 +1261,14 @@ function App() {
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2"><Shield className="w-4 h-4 text-gray-500" /><h3 className="font-semibold text-gray-800">Risk Analysis</h3></div>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded border ${riskChipClass(riskLevel)}`}>{riskLevel}</span>
+              <div className="flex items-center gap-2">
+                {manualRiskOverride && (
+                  <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                    Manual override
+                  </span>
+                )}
+                <span className={`text-xs font-medium px-2 py-0.5 rounded border ${riskChipClass(riskLevel)}`}>{riskLevel}</span>
+              </div>
             </div>
             <div className="p-5 space-y-3">
               <div>
@@ -1158,6 +1278,42 @@ function App() {
               <div>
                 <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Recommendation</p>
                 <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{selectedRisk?.recommendation || 'Analysis pending.'}</p>
+              </div>
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+                  Reclassify risk
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['high', 'medium', 'low'] as const).map((level) => {
+                    const active = riskLevel === level;
+                    return (
+                      <button
+                        key={level}
+                        onClick={() => setManualRiskClassification(selectedDifference.id, level)}
+                        className={`h-8 rounded text-xs font-medium border transition-colors ${
+                          active
+                            ? `${riskChipClass(level)} border-current`
+                            : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        {level}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-2">
+                  <button
+                    onClick={() => clearManualRiskClassification(selectedDifference.id)}
+                    disabled={!manualRiskOverride}
+                    className={`h-8 px-3 rounded text-xs font-medium border ${
+                      manualRiskOverride
+                        ? 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                        : 'border-gray-100 text-gray-400 cursor-not-allowed'
+                    }`}
+                  >
+                    Use automatic classification
+                  </button>
+                </div>
               </div>
               <div className="pt-2 border-t border-gray-100">
                 <button onClick={() => setAskOpen((v) => !v)} className="text-sm font-medium text-blue-600 hover:text-blue-700">Ask AI about this risk</button>

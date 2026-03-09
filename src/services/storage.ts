@@ -72,6 +72,7 @@ export function getComparisons(): Comparison[] {
       riskAnalyses: (c.riskAnalyses || []).map((risk) => ({
         ...risk,
         analyzedAt: parseDate(risk.analyzedAt),
+        manualOverrideAt: risk.manualOverrideAt ? parseDate(risk.manualOverrideAt) : undefined,
       })),
       groupingReviews: c.groupingReviews || [],
       groupingActionLogs: (c.groupingActionLogs || []).map((log) => ({
