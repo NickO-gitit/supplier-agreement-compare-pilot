@@ -917,6 +917,7 @@ function App() {
     const status = responseForChange(responses, selectedDifference.id);
     const riskLevel = riskLevelForChange(reviewRisks, selectedDifference.id);
     const followUps = answersByChange[selectedDifference.id] || [];
+    const submittedResponse = responses.find((entry) => entry.changeId === selectedDifference.id) || null;
     const requiresComment = draftStatus === 'countered' || draftStatus === 'rejected';
     const canSave = !!draftStatus && (!requiresComment || !!draftComment.trim()) && !savingResponse;
 
@@ -1029,9 +1030,28 @@ function App() {
             <div className="px-6 py-4 border-b border-gray-100"><h3 className="font-semibold text-gray-800">Your Response</h3></div>
             <div className="p-5 space-y-4">
               {draftReadOnly && status !== 'pending' ? (
-                <div className="border border-gray-200 rounded p-3 bg-gray-50 flex items-center justify-between">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${responseChipClass(status)}`}>{responseLabel(status)} saved</span>
-                  <button className="text-sm text-blue-600 hover:text-blue-700" onClick={() => setDraftReadOnly(false)}>Edit</button>
+                <div className="border border-gray-200 rounded p-3 bg-gray-50 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${responseChipClass(status)}`}>
+                      {responseLabel(status)} submitted
+                    </span>
+                    <button
+                      className="text-sm text-blue-600 hover:text-blue-700"
+                      onClick={() => setDraftReadOnly(false)}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                  <div className="border border-gray-200 rounded bg-white px-3 py-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">
+                      Submitted response
+                    </p>
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                      {submittedResponse?.comment?.trim()
+                        ? submittedResponse.comment
+                        : 'No comment was included for this response.'}
+                    </p>
+                  </div>
                 </div>
               ) : (
                 <>
