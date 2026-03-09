@@ -29,7 +29,7 @@ import type {
   Document,
   RiskAnalysis,
 } from './types';
-import { computeDiff, generateInlineDiffHTML } from './services/diffEngine';
+import { computeDiff, generateDiffHTML, generateInlineDiffHTML } from './services/diffEngine';
 import { extractText, getFileType } from './services/extractText';
 import { analyzeAllRisks, askRiskFollowUp, isConfigured } from './services/riskAnalysis';
 import {
@@ -1288,6 +1288,11 @@ function App() {
       currentComparison.originalDocument?.text || '',
       currentComparison.proposedDocument?.text || ''
     );
+    const selectedContextHtml = generateDiffHTML(
+      selectedContext.original || '',
+      selectedContext.proposed || '',
+      'word'
+    );
 
     return (
       <div className="px-8 py-6 bg-gray-50 h-full overflow-auto">
@@ -1563,9 +1568,14 @@ function App() {
                       </p>
                     </div>
                     <div className="p-4">
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
-                        {selectedContext.original || '[No original context available]'}
-                      </p>
+                      {selectedContext.original ? (
+                        <div
+                          className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
+                          dangerouslySetInnerHTML={{ __html: selectedContextHtml.originalHTML }}
+                        />
+                      ) : (
+                        <p className="text-sm text-gray-500 font-mono">[No original context available]</p>
+                      )}
                     </div>
                   </div>
 
@@ -1576,9 +1586,14 @@ function App() {
                       </p>
                     </div>
                     <div className="p-4">
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap font-mono">
-                        {selectedContext.proposed || '[No proposed context available]'}
-                      </p>
+                      {selectedContext.proposed ? (
+                        <div
+                          className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
+                          dangerouslySetInnerHTML={{ __html: selectedContextHtml.proposedHTML }}
+                        />
+                      ) : (
+                        <p className="text-sm text-gray-500 font-mono">[No proposed context available]</p>
+                      )}
                     </div>
                   </div>
                 </div>
