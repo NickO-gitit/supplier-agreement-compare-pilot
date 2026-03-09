@@ -918,13 +918,13 @@ function App() {
                 <FileNamePill label="Proposed" value={currentComparison.proposedDocument?.name || 'N/A'} />
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="inline-flex items-center border border-gray-200 rounded">
+            <div className="flex items-center gap-2 shrink-0 flex-nowrap">
+              <div className="inline-flex items-center border border-gray-200 rounded shrink-0">
                 <button className="h-9 w-9 flex items-center justify-center hover:bg-gray-50" onClick={() => setReviewIndex((v) => Math.max(0, v - 1))}><ChevronLeft className="w-4 h-4" /></button>
-                <span className="px-3 text-sm text-gray-600">{reviewIndex + 1} / {reviewDiffs.length}</span>
+                <span className="px-3 text-sm text-gray-600 whitespace-nowrap text-center min-w-[4.25rem]">{reviewIndex + 1} / {reviewDiffs.length}</span>
                 <button className="h-9 w-9 flex items-center justify-center hover:bg-gray-50" onClick={() => setReviewIndex((v) => Math.min(reviewDiffs.length - 1, v + 1))}><ChevronRight className="w-4 h-4" /></button>
               </div>
-              <button onClick={() => setDrawerOpen(true)} className="h-9 px-3 border border-gray-200 bg-white rounded text-sm font-medium text-gray-700 hover:bg-gray-50">View Document</button>
+              <button onClick={() => setDrawerOpen(true)} className="h-9 px-4 min-w-[7.75rem] whitespace-nowrap shrink-0 border border-gray-200 bg-white rounded text-sm font-medium text-gray-700 hover:bg-gray-50">View Document</button>
             </div>
           </div>
 
