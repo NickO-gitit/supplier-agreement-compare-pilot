@@ -350,6 +350,52 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#039;');
 }
 
+function textToHtml(value: string): string {
+  return escapeHtml(value).replace(/\n/g, '<br>');
+}
+
+function highlightSnippetInContext(
+  contextText: string | null,
+  snippet: string | null,
+  className: 'diff-added' | 'diff-removed'
+): string | null {
+  if (!contextText) return null;
+  const context = contextText;
+  const rawSnippet = (snippet || '').trim();
+  if (!rawSnippet) {
+    return textToHtml(context);
+  }
+
+  const candidates = [
+    rawSnippet,
+    ...rawSnippet
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 20)
+      .sort((a, b) => b.length - a.length),
+  ];
+
+  let match = '';
+  let index = -1;
+  for (const candidate of candidates) {
+    const candidateIndex = context.indexOf(candidate);
+    if (candidateIndex >= 0) {
+      match = candidate;
+      index = candidateIndex;
+      break;
+    }
+  }
+
+  if (index < 0 || !match) {
+    return textToHtml(context);
+  }
+
+  const before = context.slice(0, index);
+  const marked = context.slice(index, index + match.length);
+  const after = context.slice(index + match.length);
+  return `${textToHtml(before)}<span class="diff-segment ${className}">${textToHtml(marked)}</span>${textToHtml(after)}`;
+}
+
 function toSingleLine(value: string): string {
   return normalizeEmailText(value || '')
     .replace(/\s+/g, ' ')
@@ -1692,10 +1738,15 @@ function App() {
       currentComparison.originalDocument?.text || '',
       currentComparison.proposedDocument?.text || ''
     );
-    const selectedContextInlineHtml = generateInlineDiffHTML(
-      selectedContext.original || '',
-      selectedContext.proposed || '',
-      'word'
+    const selectedOriginalContextHtml = highlightSnippetInContext(
+      selectedContext.original,
+      selectedDifference.originalText,
+      'diff-removed'
+    );
+    const selectedProposedContextHtml = highlightSnippetInContext(
+      selectedContext.proposed,
+      selectedDifference.proposedText,
+      'diff-added'
     );
 
     return (
@@ -1986,25 +2037,47 @@ function App() {
                 </button>
               </div>
               <div className="flex-1 overflow-auto p-6">
-                <div className="border border-gray-200 rounded overflow-hidden">
-                  <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Expanded context with highlights
-                    </p>
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className="px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700">Added</span>
-                      <span className="px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-700">Removed</span>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="border border-gray-200 rounded overflow-hidden">
+                    <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Before (original)
+                      </p>
+                      <span className="px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-700 text-[11px]">
+                        Removed highlight
+                      </span>
+                    </div>
+                    <div className="p-4">
+                      {selectedOriginalContextHtml ? (
+                        <div
+                          className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
+                          dangerouslySetInnerHTML={{ __html: selectedOriginalContextHtml }}
+                        />
+                      ) : (
+                        <p className="text-sm text-gray-500 font-mono">[No original context available]</p>
+                      )}
                     </div>
                   </div>
-                  <div className="p-4">
-                    {selectedContext.original || selectedContext.proposed ? (
-                      <div
-                        className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
-                        dangerouslySetInnerHTML={{ __html: selectedContextInlineHtml }}
-                      />
-                    ) : (
-                      <p className="text-sm text-gray-500 font-mono">[No context available for this change]</p>
-                    )}
+
+                  <div className="border border-gray-200 rounded overflow-hidden">
+                    <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        After (proposed)
+                      </p>
+                      <span className="px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px]">
+                        Added highlight
+                      </span>
+                    </div>
+                    <div className="p-4">
+                      {selectedProposedContextHtml ? (
+                        <div
+                          className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
+                          dangerouslySetInnerHTML={{ __html: selectedProposedContextHtml }}
+                        />
+                      ) : (
+                        <p className="text-sm text-gray-500 font-mono">[No proposed context available]</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
