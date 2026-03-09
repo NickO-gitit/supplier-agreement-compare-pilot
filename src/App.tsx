@@ -165,6 +165,17 @@ function asOriginalDocument(defaultOriginal: DefaultOriginalAgreement): Document
   };
 }
 
+function normalizeEmailText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/\u2026/g, '...')
+    .replace(/\u2192/g, '->')
+    .replace(/\u00A0/g, ' ');
+}
+
 function riskForChange(risks: RiskAnalysis[], changeId: string): RiskAnalysis | null {
   return risks.find((entry) => entry.differenceId === changeId) || null;
 }
@@ -589,7 +600,24 @@ function App() {
       lines.push('');
     });
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const plainText = lines.join('\n');
+    let fileContent = plainText;
+    let mimeType = 'text/plain;charset=utf-8';
+
+    if (exportFormat === 'email') {
+      const sanitizedBody = normalizeEmailText(plainText).replace(/\n/g, '\r\n');
+      fileContent = [
+        'Subject: Supplier Response Draft',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        sanitizedBody,
+      ].join('\r\n');
+      mimeType = 'message/rfc822;charset=utf-8';
+    }
+
+    const blob = new Blob([`\uFEFF${fileContent}`], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     const extension = exportFormat === 'email' ? 'eml' : exportFormat === 'docx' ? 'docx' : 'pdf';
