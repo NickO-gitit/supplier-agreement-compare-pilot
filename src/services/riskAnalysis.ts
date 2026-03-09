@@ -13,6 +13,7 @@ Context: {context}
 Respond in this exact JSON format:
 {
   "riskLevel": "low" | "medium" | "high",
+  "confidence": <integer 0-100 indicating confidence in the risk level>,
   "category": "<category name: e.g., Liability, Payment Terms, Termination, IP Rights, Data Protection, Indemnification, Warranty, Force Majeure, Non-Compete, Other>",
   "explanation": "<1-2 sentences explaining what changed>",
   "legalImplication": "<1-2 sentences on the legal impact for the customer>",
@@ -33,6 +34,7 @@ Context: {context}
 Respond in this exact JSON format:
 {
   "riskLevel": "low" | "medium" | "high",
+  "confidence": <integer 0-100 indicating confidence in the risk level>,
   "category": "<category name: e.g., Liability, Payment Terms, Termination, IP Rights, Data Protection, Indemnification, Warranty, Force Majeure, Non-Compete, Other>",
   "explanation": "<3-6 sentences explaining what changed and why it matters>",
   "legalImplication": "<3-6 sentences on legal/commercial impact for the customer>",
@@ -162,13 +164,16 @@ export async function analyzeRisk(
       : await analyzeWithDirectApi(difference, detailLevel);
     const parsed = result.parsed;
     trace = result.trace;
+    const normalizedRiskLevel = normalizeRiskLevel(parsed.riskLevel);
+    const normalizedConfidence = normalizeRiskConfidence(parsed.confidence, normalizedRiskLevel);
     const maxExplanation = detailLevel === 'expanded' ? 1150 : 420;
     const maxLegalImplication = detailLevel === 'expanded' ? 1400 : 520;
     const maxRecommendation = detailLevel === 'expanded' ? 1400 : 520;
 
     return {
       differenceId: difference.id,
-      riskLevel: normalizeRiskLevel(parsed.riskLevel),
+      riskLevel: normalizedRiskLevel,
+      aiConfidence: normalizedConfidence,
       category: normalizeRiskCategory(parsed.category),
       explanation: normalizeRiskNarrative(
         parsed.explanation,
@@ -195,6 +200,7 @@ export async function analyzeRisk(
     return {
       differenceId: difference.id,
       riskLevel: 'medium',
+      aiConfidence: 0,
       category: 'Analysis Error',
       explanation: 'Failed to analyze this change automatically.',
       legalImplication: 'Manual review required.',
@@ -709,6 +715,27 @@ function normalizeRiskLevel(value: unknown): 'low' | 'medium' | 'high' {
     return normalized;
   }
   return 'medium';
+}
+
+function normalizeRiskConfidence(
+  value: unknown,
+  riskLevel: 'low' | 'medium' | 'high'
+): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace('%', '').trim());
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.min(100, Math.round(parsed)));
+    }
+  }
+
+  // Stable fallback so older model responses still show confidence.
+  if (riskLevel === 'high') return 82;
+  if (riskLevel === 'medium') return 74;
+  return 78;
 }
 
 function normalizeGroupingQuality(

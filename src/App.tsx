@@ -236,10 +236,12 @@ function preserveManualRiskOverrides(
     return {
       ...risk,
       riskLevel: existing.riskLevel,
+      aiConfidence: existing.aiConfidence ?? risk.aiConfidence ?? 0,
       category: existing.category,
       manualOverride: true,
       manualOverrideAt: existing.manualOverrideAt || new Date(),
       autoRiskLevel: risk.riskLevel,
+      autoAiConfidence: risk.aiConfidence,
       autoCategory: risk.category,
     };
   });
@@ -248,6 +250,14 @@ function preserveManualRiskOverrides(
 function riskLevelForChange(risks: RiskAnalysis[], changeId: string): 'low' | 'medium' | 'high' {
   const risk = risks.find((entry) => entry.differenceId === changeId && entry.status !== 'error');
   return risk?.riskLevel || 'medium';
+}
+
+function aiConfidenceForChange(risks: RiskAnalysis[], changeId: string): number {
+  const risk = risks.find((entry) => entry.differenceId === changeId && entry.status !== 'error');
+  if (!risk) return 0;
+  const value = risk.manualOverride ? risk.autoAiConfidence ?? risk.aiConfidence : risk.aiConfidence;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 function normalizeContextSection(value: string | null | undefined): string | null {
@@ -870,9 +880,11 @@ function App() {
           return {
             ...entry,
             riskLevel: level,
+            aiConfidence: entry.aiConfidence ?? 0,
             manualOverride: true,
             manualOverrideAt: now,
             autoRiskLevel: entry.autoRiskLevel || entry.riskLevel,
+            autoAiConfidence: entry.autoAiConfidence ?? entry.aiConfidence ?? 0,
             autoCategory: entry.autoCategory || entry.category,
           };
         });
@@ -882,6 +894,7 @@ function App() {
           {
             differenceId,
             riskLevel: level,
+            aiConfidence: 0,
             category: 'Manual classification',
             explanation: difference?.context || 'Manual classification applied.',
             legalImplication: 'Manual risk classification applied by reviewer.',
@@ -916,10 +929,12 @@ function App() {
         return {
           ...entry,
           riskLevel: entry.autoRiskLevel || entry.riskLevel,
+          aiConfidence: entry.autoAiConfidence ?? entry.aiConfidence ?? 0,
           category: entry.autoCategory || entry.category,
           manualOverride: false,
           manualOverrideAt: undefined,
           autoRiskLevel: undefined,
+          autoAiConfidence: undefined,
           autoCategory: undefined,
         };
       });
@@ -1718,7 +1733,12 @@ function App() {
 
     const status = responseForChange(responses, selectedDifference.id);
     const riskLevel = riskLevelForChange(reviewRisks, selectedDifference.id);
+    const aiConfidence = aiConfidenceForChange(reviewRisks, selectedDifference.id);
     const manualRiskOverride = !!selectedRisk?.manualOverride;
+    const aiClassifiedLevel =
+      selectedRisk?.manualOverride
+        ? selectedRisk.autoRiskLevel || selectedRisk.riskLevel
+        : selectedRisk?.riskLevel || riskLevel;
     const followUps = answersByChange[selectedDifference.id] || [];
     const submittedResponse = responses.find((entry) => entry.changeId === selectedDifference.id) || null;
     const requiresComment = draftStatus === 'countered' || draftStatus === 'rejected';
@@ -1849,15 +1869,12 @@ function App() {
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2"><Shield className="w-4 h-4 text-gray-500" /><h3 className="font-semibold text-gray-800">Risk Analysis</h3></div>
               <div className="flex items-center gap-2">
-                {manualRiskOverride && (
-                  <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
-                    Manual override
-                  </span>
-                )}
-                <span className={`text-xs font-medium px-2 py-0.5 rounded border ${riskChipClass(riskLevel)}`}>{riskLevel}</span>
+                <span className={`text-xs font-medium px-2 py-0.5 rounded border ${riskChipClass(riskLevel)}`}>
+                  {riskLevel.charAt(0).toUpperCase() + riskLevel.slice(1)} Risk
+                </span>
               </div>
             </div>
-            <div className="p-5 space-y-3">
+            <div className="p-5 space-y-4">
               <div>
                 <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Legal Implication</p>
                 <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{selectedRisk?.legalImplication || 'Analysis pending.'}</p>
@@ -1866,43 +1883,33 @@ function App() {
                 <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Recommendation</p>
                 <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{selectedRisk?.recommendation || 'Analysis pending.'}</p>
               </div>
-              <div className="pt-2 border-t border-gray-100">
-                <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
-                  Reclassify risk
-                </p>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['high', 'medium', 'low'] as const).map((level) => {
-                    const active = riskLevel === level;
-                    return (
-                      <button
-                        key={level}
-                        onClick={() => setManualRiskClassification(selectedDifference.id, level)}
-                        className={`h-8 rounded text-xs font-medium border transition-colors ${
-                          active
-                            ? `${riskChipClass(level)} border-current`
-                            : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                        }`}
-                      >
-                        {level}
-                      </button>
-                    );
-                  })}
+              <div className="pt-3 border-t border-gray-100 flex items-center justify-between gap-3">
+                <div className="text-sm text-gray-600">
+                  <span className="text-gray-500">AI classified as</span>{' '}
+                  <span className={`inline-flex px-2 py-0.5 rounded border text-xs font-medium ${riskChipClass(aiClassifiedLevel || riskLevel)}`}>
+                    {(aiClassifiedLevel || riskLevel).charAt(0).toUpperCase() + (aiClassifiedLevel || riskLevel).slice(1)}
+                  </span>
+                  <span className="ml-2 text-gray-500">· {aiConfidence}% confidence</span>
                 </div>
-                <div className="mt-2">
-                  <button
-                    onClick={() => clearManualRiskClassification(selectedDifference.id)}
-                    disabled={!manualRiskOverride}
-                    className={`h-8 px-3 rounded text-xs font-medium border ${
-                      manualRiskOverride
-                        ? 'border-gray-200 text-gray-700 hover:bg-gray-50'
-                        : 'border-gray-100 text-gray-400 cursor-not-allowed'
-                    }`}
-                  >
-                    Use automatic classification
-                  </button>
-                </div>
+                <select
+                  value={manualRiskOverride ? riskLevel : 'auto'}
+                  onChange={(event) => {
+                    const value = event.target.value as 'auto' | 'high' | 'medium' | 'low';
+                    if (value === 'auto') {
+                      clearManualRiskClassification(selectedDifference.id);
+                      return;
+                    }
+                    setManualRiskClassification(selectedDifference.id, value);
+                  }}
+                  className="h-9 min-w-[9rem] rounded border border-gray-200 bg-white px-3 text-sm text-gray-700"
+                >
+                  <option value="auto">Override: none</option>
+                  <option value="high">Override: High</option>
+                  <option value="medium">Override: Medium</option>
+                  <option value="low">Override: Low</option>
+                </select>
               </div>
-              <div className="pt-2 border-t border-gray-100">
+              <div className="pt-1">
                 <button onClick={() => setAskOpen((v) => !v)} className="text-sm font-medium text-blue-600 hover:text-blue-700">Ask AI about this risk</button>
                 {askOpen && (
                   <div className="mt-2 space-y-2">

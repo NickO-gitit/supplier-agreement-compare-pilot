@@ -21,10 +21,12 @@ export interface Difference {
 export interface RiskAnalysis {
   differenceId: string;
   riskLevel: 'low' | 'medium' | 'high';
+  aiConfidence?: number; // 0-100
   category: string;
   manualOverride?: boolean;
   manualOverrideAt?: Date;
   autoRiskLevel?: 'low' | 'medium' | 'high';
+  autoAiConfidence?: number;
   autoCategory?: string;
   explanation: string;
   legalImplication: string;
