@@ -37,7 +37,7 @@ import type {
 } from './types';
 import { computeDiff, generateInlineDiffHTML } from './services/diffEngine';
 import { extractText, getFileType } from './services/extractText';
-import { analyzeAllRisks, askRiskFollowUp, isConfigured } from './services/riskAnalysis';
+import { analyzeAllRisks, analyzeRiskExpanded, askRiskFollowUp, isConfigured } from './services/riskAnalysis';
 import {
   clearDefaultOriginalAgreement,
   createCustomer,
@@ -487,6 +487,8 @@ function App() {
   const [askQuestion, setAskQuestion] = useState('');
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  const [expandedRiskLoading, setExpandedRiskLoading] = useState(false);
+  const [expandedRiskError, setExpandedRiskError] = useState<string | null>(null);
   const [answersByChange, setAnswersByChange] = useState<
     Record<string, Array<{ question: string; answer: string; askedAt: Date }>>
   >({});
@@ -632,6 +634,7 @@ function App() {
       setDraftStatus(null);
       setDraftComment('');
       setDraftReadOnly(false);
+      setExpandedRiskError(null);
       return;
     }
 
@@ -640,12 +643,14 @@ function App() {
       setDraftStatus(null);
       setDraftComment('');
       setDraftReadOnly(false);
+      setExpandedRiskError(null);
       return;
     }
 
     setDraftStatus(existing.status === 'pending' ? null : existing.status);
     setDraftComment(existing.comment || '');
     setDraftReadOnly(true);
+    setExpandedRiskError(null);
   }, [responses, selectedDifference?.id]);
 
   const handleCreateCustomer = useCallback(
@@ -925,6 +930,54 @@ function App() {
       setAskLoading(false);
     }
   }, [askQuestion, selectedDifference, selectedRisk]);
+
+  const runExpandedRiskAnalysisForSelected = useCallback(async () => {
+    if (!currentComparison || !selectedDifference) return;
+
+    setExpandedRiskLoading(true);
+    setExpandedRiskError(null);
+    try {
+      const expanded = await analyzeRiskExpanded(selectedDifference);
+      const existing = currentComparison.riskAnalyses.find(
+        (entry) => entry.differenceId === selectedDifference.id
+      );
+
+      let merged = expanded;
+      if (existing?.manualOverride) {
+        merged = {
+          ...expanded,
+          riskLevel: existing.riskLevel,
+          aiConfidence: existing.aiConfidence ?? expanded.aiConfidence ?? 0,
+          category: existing.category,
+          manualOverride: true,
+          manualOverrideAt: existing.manualOverrideAt || new Date(),
+          autoRiskLevel: expanded.riskLevel,
+          autoAiConfidence: expanded.aiConfidence,
+          autoCategory: expanded.category,
+        };
+      }
+
+      const exists = currentComparison.riskAnalyses.some(
+        (entry) => entry.differenceId === selectedDifference.id
+      );
+      const nextRisks = exists
+        ? currentComparison.riskAnalyses.map((entry) =>
+            entry.differenceId === selectedDifference.id ? merged : entry
+          )
+        : [...currentComparison.riskAnalyses, merged];
+
+      upsertComparison({
+        ...currentComparison,
+        riskAnalyses: nextRisks,
+      });
+    } catch (error) {
+      setExpandedRiskError(
+        error instanceof Error ? error.message : 'Failed to run expanded legal analysis.'
+      );
+    } finally {
+      setExpandedRiskLoading(false);
+    }
+  }, [currentComparison, selectedDifference, upsertComparison]);
   const exportResponse = useCallback(async () => {
     if (!currentComparison) return;
 
@@ -1857,6 +1910,27 @@ function App() {
                   <option value="medium">Override: Medium</option>
                   <option value="low">Override: Low</option>
                 </select>
+              </div>
+              <div className="pt-1">
+                <button
+                  onClick={runExpandedRiskAnalysisForSelected}
+                  disabled={expandedRiskLoading}
+                  className={`h-8 px-3 rounded text-sm font-medium border ${
+                    expandedRiskLoading
+                      ? 'border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed'
+                      : 'border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100'
+                  }`}
+                >
+                  {expandedRiskLoading ? 'Running expanded analysis...' : 'Run Expanded Legal Analysis'}
+                </button>
+                {selectedRisk?.analysisDetailLevel === 'expanded' && (
+                  <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700">
+                    Expanded
+                  </span>
+                )}
+                {expandedRiskError && (
+                  <p className="mt-2 text-xs text-red-600">{expandedRiskError}</p>
+                )}
               </div>
               <div className="pt-1">
                 <button onClick={() => setAskOpen((v) => !v)} className="text-sm font-medium text-blue-600 hover:text-blue-700">Ask AI about this risk</button>
