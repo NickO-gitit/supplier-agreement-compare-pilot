@@ -360,6 +360,52 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#039;');
 }
 
+function textToHtml(value: string): string {
+  return escapeHtml(value).replace(/\n/g, '<br>');
+}
+
+function highlightSnippetInContext(
+  contextText: string | null,
+  snippet: string | null,
+  className: 'diff-added' | 'diff-removed' | 'diff-modified'
+): string | null {
+  if (!contextText) return null;
+  const context = contextText;
+  const rawSnippet = (snippet || '').trim();
+  if (!rawSnippet) {
+    return textToHtml(context);
+  }
+
+  const candidates = [
+    rawSnippet,
+    ...rawSnippet
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 20)
+      .sort((a, b) => b.length - a.length),
+  ];
+
+  let match = '';
+  let index = -1;
+  for (const candidate of candidates) {
+    const candidateIndex = context.indexOf(candidate);
+    if (candidateIndex >= 0) {
+      match = candidate;
+      index = candidateIndex;
+      break;
+    }
+  }
+
+  if (index < 0 || !match) {
+    return textToHtml(context);
+  }
+
+  const before = context.slice(0, index);
+  const marked = context.slice(index, index + match.length);
+  const after = context.slice(index + match.length);
+  return `${textToHtml(before)}<span class="diff-segment ${className}">${textToHtml(marked)}</span>${textToHtml(after)}`;
+}
+
 function toSingleLine(value: string): string {
   return normalizeEmailText(value || '')
     .replace(/\s+/g, ' ')
@@ -1765,10 +1811,24 @@ function App() {
       currentComparison.originalDocument?.text || '',
       currentComparison.proposedDocument?.text || ''
     );
-    const selectedContextInlineHtml = generateInlineDiffHTML(
-      selectedContext.original || '',
-      selectedContext.proposed || '',
-      'word'
+    const selectedContextBaseText =
+      selectedDifference.type === 'deletion'
+        ? selectedContext.original
+        : selectedContext.proposed || selectedContext.original;
+    const selectedContextSnippet =
+      selectedDifference.type === 'deletion'
+        ? selectedDifference.originalText
+        : selectedDifference.proposedText;
+    const selectedContextClass =
+      selectedDifference.type === 'deletion'
+        ? 'diff-removed'
+        : selectedDifference.type === 'addition'
+        ? 'diff-added'
+        : 'diff-modified';
+    const selectedContextFocusedHtml = highlightSnippetInContext(
+      selectedContextBaseText,
+      selectedContextSnippet,
+      selectedContextClass
     );
 
     return (
@@ -2072,16 +2132,15 @@ function App() {
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Expanded context with highlights
                     </p>
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className="px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700">Added</span>
-                      <span className="px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-700">Removed</span>
-                    </div>
+                    <span className="text-[11px] px-2 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700">
+                      Only selected change is highlighted
+                    </span>
                   </div>
                   <div className="p-4">
-                    {selectedContext.original || selectedContext.proposed ? (
+                    {selectedContextFocusedHtml ? (
                       <div
                         className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
-                        dangerouslySetInnerHTML={{ __html: selectedContextInlineHtml }}
+                        dangerouslySetInnerHTML={{ __html: selectedContextFocusedHtml }}
                       />
                     ) : (
                       <p className="text-sm text-gray-500 font-mono">[No context available for this change]</p>
