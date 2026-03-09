@@ -841,7 +841,14 @@ function App() {
                   return (
                     <tr key={comparison.id} className="border-t border-gray-100">
                       <td className="px-6 py-3 text-gray-700">{new Date(comparison.createdAt).toLocaleString()}</td>
-                      <td className="px-6 py-3 text-gray-700">{comparison.proposedDocument?.name || 'N/A'}</td>
+                      <td className="px-6 py-3 text-gray-700">
+                        <span
+                          className="inline-block max-w-[24rem] truncate align-bottom"
+                          title={comparison.proposedDocument?.name || 'N/A'}
+                        >
+                          {comparison.proposedDocument?.name || 'N/A'}
+                        </span>
+                      </td>
                       <td className={`px-6 py-3 font-medium ${changesClass}`}>{changes}</td>
                       <td className="px-6 py-3">
                         <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${statusClass}`}>
@@ -904,11 +911,12 @@ function App() {
       <div className="px-8 py-6 bg-gray-50 h-full overflow-auto">
         <div className="max-w-3xl mx-auto space-y-4">
           <div className="flex items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <h1 className="text-xl font-semibold text-gray-900">{currentCustomer?.name || 'Review'}</h1>
-              <p className="text-sm text-gray-500">
-                {currentComparison.originalDocument?.name} {'->'} {currentComparison.proposedDocument?.name}
-              </p>
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl">
+                <FileNamePill label="Original" value={currentComparison.originalDocument?.name || 'N/A'} />
+                <FileNamePill label="Proposed" value={currentComparison.proposedDocument?.name || 'N/A'} />
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <div className="inline-flex items-center border border-gray-200 rounded">
@@ -931,7 +939,7 @@ function App() {
             <div className={`h-1 ${topBarClass(selectedDifference.type)}`} />
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-2">
               <h2 className="font-semibold text-gray-800">Change {reviewIndex + 1}</h2>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className={`text-xs font-medium px-2 py-0.5 rounded border ${diffChipClass(selectedDifference.type)}`}>{selectedDifference.type}</span>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded border ${riskChipClass(riskLevel)}`}>{riskLevel} risk</span>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded ${responseChipClass(status)}`}>{responseLabel(status)}</span>
@@ -1075,10 +1083,12 @@ function App() {
             <div className="relative w-full max-w-md rounded-lg shadow-2xl border border-gray-200 bg-white">
               <div className="px-6 py-4 border-b border-gray-100">
                 <h3 className="font-semibold text-gray-800">Export Supplier Response</h3>
-                <p className="text-sm text-gray-500">{currentCustomer?.name} • {currentComparison.proposedDocument?.name}</p>
+                <p className="text-sm text-gray-500 truncate" title={`${currentCustomer?.name} • ${currentComparison.proposedDocument?.name}`}>
+                  {currentCustomer?.name} • {currentComparison.proposedDocument?.name}
+                </p>
               </div>
               <div className="px-6 py-4 space-y-4">
-                <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                <div className="grid grid-cols-4 gap-1 sm:gap-2 text-center text-xs">
                   <StatCell label="Total" value={String(reviewDiffs.length)} />
                   <StatCell label="Accepted" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'accepted').length)} />
                   <StatCell label="Countered" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'countered').length)} />
@@ -1250,7 +1260,10 @@ function UploadBlock({ title, accent, value, upload, showDefaultBadge, onClear, 
       <div className={`rounded border p-4 ${accentClass}`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2"><p className="text-sm font-medium truncate">{value.name}</p>{showDefaultBadge && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">Default</span>}</div>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium truncate max-w-[14rem]" title={value.name}>{value.name}</p>
+              {showDefaultBadge && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">Default</span>}
+            </div>
             <p className="text-xs opacity-80 mt-1">{bytesToLabel(value.sizeBytes)} • {value.fileType.toUpperCase()}</p>
           </div>
           <button onClick={onClear} className="p-1 rounded hover:bg-white/60"><X className="w-4 h-4" /></button>
@@ -1281,7 +1294,12 @@ function ActionChoice({ label, active, activeClass, idleClass, onClick }: Action
 type StatCellProps = { label: string; value: string };
 
 function StatCell({ label, value }: StatCellProps) {
-  return <div className="border border-gray-200 rounded p-2 bg-gray-50"><p className="text-gray-500">{label}</p><p className="text-sm font-semibold text-gray-800 mt-1">{value}</p></div>;
+  return (
+    <div className="border border-gray-200 rounded p-2 bg-gray-50 min-w-0">
+      <p className="text-[11px] text-gray-500 truncate" title={label}>{label}</p>
+      <p className="text-sm font-semibold text-gray-800 mt-1 truncate" title={value}>{value}</p>
+    </div>
+  );
 }
 
 type FormatChoiceProps = {
@@ -1292,6 +1310,22 @@ type FormatChoiceProps = {
 
 function FormatChoice({ label, active, onClick }: FormatChoiceProps) {
   return <button onClick={onClick} className={`h-9 rounded text-xs font-medium border ${active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>{label}</button>;
+}
+
+type FileNamePillProps = {
+  label: string;
+  value: string;
+};
+
+function FileNamePill({ label, value }: FileNamePillProps) {
+  return (
+    <div className="border border-gray-200 rounded bg-white px-3 py-2 min-w-0">
+      <p className="text-[11px] uppercase tracking-wide text-gray-400">{label}</p>
+      <p className="text-sm text-gray-700 truncate" title={value}>
+        {value}
+      </p>
+    </div>
+  );
 }
 
 export default App;
