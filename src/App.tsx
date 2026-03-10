@@ -263,116 +263,6 @@ function aiConfidenceForChange(risks: RiskAnalysis[], changeId: string): number 
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-function normalizeContextSection(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === '[Not available]') return null;
-  return trimmed;
-}
-
-function parseDifferenceContextSections(context: string): {
-  original: string | null;
-  proposed: string | null;
-} {
-  if (!context || !context.trim()) {
-    return { original: null, proposed: null };
-  }
-
-  const originalMatch = context.match(
-    /Original section context:\n([\s\S]*?)(?:\n\nProposed section context:\n|$)/
-  );
-  const proposedMatch = context.match(/Proposed section context:\n([\s\S]*)$/);
-
-  return {
-    original: normalizeContextSection(originalMatch?.[1] ?? null),
-    proposed: normalizeContextSection(proposedMatch?.[1] ?? null),
-  };
-}
-
-function clampPosition(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function extractContextWindow(
-  text: string,
-  position: Difference['originalPosition'] | Difference['proposedPosition'] | undefined,
-  maxChars = 1800
-): string | null {
-  const source = text || '';
-  if (!source.trim()) return null;
-
-  if (!position) {
-    return source.slice(0, maxChars).trim() || null;
-  }
-
-  const safeStart = clampPosition(position.start, 0, source.length);
-  const safeEnd = clampPosition(position.end, safeStart, source.length);
-  const before = Math.floor(maxChars * 0.45);
-  const after = Math.floor(maxChars * 0.55);
-  let sliceStart = clampPosition(safeStart - before, 0, source.length);
-  let sliceEnd = clampPosition(safeEnd + after, sliceStart, source.length);
-
-  if (sliceStart > 0) {
-    const nextNewline = source.indexOf('\n', sliceStart);
-    if (nextNewline > sliceStart && nextNewline < sliceStart + 240) {
-      sliceStart = nextNewline + 1;
-    }
-  }
-
-  if (sliceEnd < source.length) {
-    const previousNewline = source.lastIndexOf('\n', sliceEnd);
-    if (previousNewline > sliceEnd - 240) {
-      sliceEnd = previousNewline;
-    }
-  }
-
-  const section = source.slice(sliceStart, sliceEnd).trim();
-  return section || null;
-}
-
-function getDifferenceContextSections(
-  difference: Difference,
-  originalDocumentText: string,
-  proposedDocumentText: string
-): {
-  original: string | null;
-  proposed: string | null;
-} {
-  const parsed = parseDifferenceContextSections(difference.context || '');
-  const fallbackOriginal = extractContextWindow(
-    originalDocumentText,
-    difference.originalPosition
-  );
-  const fallbackProposed = extractContextWindow(
-    proposedDocumentText,
-    difference.proposedPosition
-  );
-
-  return {
-    original: parsed.original || fallbackOriginal,
-    proposed: parsed.proposed || fallbackProposed,
-  };
-}
-
-function buildExpandedContextText(
-  differenceType: Difference['type'],
-  originalContext: string | null,
-  proposedContext: string | null
-): string | null {
-  const original = normalizeContextSection(originalContext);
-  const proposed = normalizeContextSection(proposedContext);
-
-  if (!original && !proposed) return null;
-  if (original && proposed && original === proposed) return original;
-  if (original && !proposed) return original;
-  if (!original && proposed) return proposed;
-
-  if (differenceType === 'deletion') {
-    return `Original context:\n${original}\n\nProposed context:\n${proposed}`;
-  }
-  return `Proposed context:\n${proposed}\n\nOriginal context:\n${original}`;
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -382,50 +272,18 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#039;');
 }
 
-function textToHtml(value: string): string {
-  return escapeHtml(value).replace(/\n/g, '<br>');
-}
+function keepOnlySelectedDiffHighlight(inlineHtml: string, selectedDifferenceId: string): string {
+  if (!inlineHtml || !selectedDifferenceId) return inlineHtml;
 
-function highlightSnippetInContext(
-  contextText: string | null,
-  snippet: string | null,
-  className: 'diff-added' | 'diff-removed' | 'diff-modified'
-): string | null {
-  if (!contextText) return null;
-  const context = contextText;
-  const rawSnippet = (snippet || '').trim();
-  if (!rawSnippet) {
-    return textToHtml(context);
-  }
-
-  const candidates = [
-    rawSnippet,
-    ...rawSnippet
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length >= 20)
-      .sort((a, b) => b.length - a.length),
-  ];
-
-  let match = '';
-  let index = -1;
-  for (const candidate of candidates) {
-    const candidateIndex = context.indexOf(candidate);
-    if (candidateIndex >= 0) {
-      match = candidate;
-      index = candidateIndex;
-      break;
+  return inlineHtml.replace(
+    /<span class="diff-segment ([^"]+)" data-diff-id="([^"]+)">([\s\S]*?)<\/span>/g,
+    (_match, className: string, diffId: string, innerHtml: string) => {
+      if (diffId === selectedDifferenceId) {
+        return `<span class="diff-segment ${className}" data-diff-id="${diffId}">${innerHtml}</span>`;
+      }
+      return innerHtml;
     }
-  }
-
-  if (index < 0 || !match) {
-    return textToHtml(context);
-  }
-
-  const before = context.slice(0, index);
-  const marked = context.slice(index, index + match.length);
-  const after = context.slice(index + match.length);
-  return `${textToHtml(before)}<span class="diff-segment ${className}">${textToHtml(marked)}</span>${textToHtml(after)}`;
+  );
 }
 
 function toSingleLine(value: string): string {
@@ -564,6 +422,7 @@ function App() {
   >({});
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const contextDocumentRef = useRef<HTMLDivElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf');
   const [coverNote, setCoverNote] = useState(DEFAULT_NOTE);
@@ -688,6 +547,19 @@ function App() {
   const reviewRisks = currentComparison?.riskAnalyses || [];
   const selectedDifference = reviewDiffs[reviewIndex] || null;
   const selectedRisk = selectedDifference ? riskForChange(reviewRisks, selectedDifference.id) : null;
+
+  useEffect(() => {
+    if (!contextOpen || !selectedDifference) return;
+    const container = contextDocumentRef.current;
+    if (!container) return;
+
+    const target = container.querySelector<HTMLElement>(
+      `[data-diff-id="${selectedDifference.id}"]`
+    );
+    if (!target) return;
+
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [contextOpen, selectedDifference?.id]);
 
   const reviewedCount = useMemo(() => {
     if (!currentComparison) return 0;
@@ -828,7 +700,6 @@ function App() {
           ...currentComparisonState,
           riskAnalyses: risks,
         });
-        setDisclaimerComparisonId(comparison.id);
       } finally {
         setIsAnalyzing(false);
       }
@@ -862,6 +733,7 @@ function App() {
 
       upsertComparison(comparison);
       navigate({ type: 'review', comparisonId: comparison.id });
+      setDisclaimerComparisonId(comparison.id);
       void runRiskAnalysis(comparison);
       setUploadComparisonTitle('');
     } catch (error) {
@@ -1887,30 +1759,9 @@ function App() {
       currentComparison.proposedDocument?.text || '',
       'word'
     );
-    const selectedContext = getDifferenceContextSections(
-      selectedDifference,
-      currentComparison.originalDocument?.text || '',
-      currentComparison.proposedDocument?.text || ''
-    );
-    const selectedContextBaseText = buildExpandedContextText(
-      selectedDifference.type,
-      selectedContext.original,
-      selectedContext.proposed
-    );
-    const selectedContextSnippet =
-      selectedDifference.type === 'deletion'
-        ? selectedDifference.originalText
-        : selectedDifference.proposedText;
-    const selectedContextClass =
-      selectedDifference.type === 'deletion'
-        ? 'diff-removed'
-        : selectedDifference.type === 'addition'
-        ? 'diff-added'
-        : 'diff-modified';
-    const selectedContextFocusedHtml = highlightSnippetInContext(
-      selectedContextBaseText,
-      selectedContextSnippet,
-      selectedContextClass
+    const selectedContextDocumentHtml = keepOnlySelectedDiffHighlight(
+      inlineHtml,
+      selectedDifference.id
     );
 
     return (
@@ -2198,7 +2049,7 @@ function App() {
                 <div>
                   <h3 className="font-semibold text-gray-800">Expanded Context</h3>
                   <p className="text-sm text-gray-500">
-                    Surrounding section context for change {reviewIndex + 1}
+                    Full document view with selected change {reviewIndex + 1} highlighted
                   </p>
                 </div>
                 <button
@@ -2212,20 +2063,20 @@ function App() {
                 <div className="border border-gray-200 rounded overflow-hidden">
                   <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Expanded context with highlights
+                      Full comparison document
                     </p>
                     <span className="text-[11px] px-2 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700">
                       Only selected change is highlighted
                     </span>
                   </div>
-                  <div className="p-4">
-                    {selectedContextFocusedHtml ? (
+                  <div ref={contextDocumentRef} className="p-4 max-h-[60vh] overflow-auto">
+                    {selectedContextDocumentHtml ? (
                       <div
                         className="text-sm text-gray-700 whitespace-pre-wrap font-mono break-words"
-                        dangerouslySetInnerHTML={{ __html: selectedContextFocusedHtml }}
+                        dangerouslySetInnerHTML={{ __html: selectedContextDocumentHtml }}
                       />
                     ) : (
-                      <p className="text-sm text-gray-500 font-mono">[No context available for this change]</p>
+                      <p className="text-sm text-gray-500 font-mono">[No document content available]</p>
                     )}
                   </div>
                 </div>
