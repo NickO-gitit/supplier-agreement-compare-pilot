@@ -78,6 +78,43 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Ensure Azure providers are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ensure_provider() {
+            local namespace="$1"
+            local state
+            state=$(az provider show --namespace "$namespace" --query registrationState -o tsv 2>/dev/null || echo "NotRegistered")
+            echo "$namespace registration state: $state"
+            if [[ "$state" != "Registered" ]]; then
+              echo "Registering $namespace..."
+              az provider register --namespace "$namespace" --wait
+            fi
+            state=$(az provider show --namespace "$namespace" --query registrationState -o tsv)
+            if [[ "$state" != "Registered" ]]; then
+              echo "Provider $namespace is not registered (state: $state)"
+              exit 1
+            fi
+          }
+
+          providers=(
+            Microsoft.App
+            Microsoft.ContainerRegistry
+            Microsoft.OperationalInsights
+            Microsoft.ManagedIdentity
+            Microsoft.Authorization
+            Microsoft.Sql
+            Microsoft.Storage
+            Microsoft.DocumentDB
+            Microsoft.AppConfiguration
+          )
+
+          for namespace in "${providers[@]}"; do
+            ensure_provider "$namespace"
+          done
+
       - name: Derive ACR name automatically
         id: naming
         run: |

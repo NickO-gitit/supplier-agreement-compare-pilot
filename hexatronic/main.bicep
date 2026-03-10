@@ -186,7 +186,8 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
 }
 
 resource cosmosSqlDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2023-11-15' = {
-  name: '${cosmosAccount.name}/${cosmosDatabaseName}'
+  name: cosmosDatabaseName
+  parent: cosmosAccount
   properties: {
     resource: {
       id: cosmosDatabaseName
@@ -195,7 +196,8 @@ resource cosmosSqlDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2
 }
 
 resource cosmosSqlContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-11-15' = {
-  name: '${cosmosAccount.name}/${cosmosDatabaseName}/${cosmosContainerName}'
+  name: cosmosContainerName
+  parent: cosmosSqlDatabase
   properties: {
     resource: {
       id: cosmosContainerName
