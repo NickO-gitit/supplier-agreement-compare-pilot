@@ -351,6 +351,25 @@ function getDifferenceContextSections(
   };
 }
 
+function buildExpandedContextText(
+  differenceType: Difference['type'],
+  originalContext: string | null,
+  proposedContext: string | null
+): string | null {
+  const original = normalizeContextSection(originalContext);
+  const proposed = normalizeContextSection(proposedContext);
+
+  if (!original && !proposed) return null;
+  if (original && proposed && original === proposed) return original;
+  if (original && !proposed) return original;
+  if (!original && proposed) return proposed;
+
+  if (differenceType === 'deletion') {
+    return `Original context:\n${original}\n\nProposed context:\n${proposed}`;
+  }
+  return `Proposed context:\n${proposed}\n\nOriginal context:\n${original}`;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -1811,10 +1830,11 @@ function App() {
       currentComparison.originalDocument?.text || '',
       currentComparison.proposedDocument?.text || ''
     );
-    const selectedContextBaseText =
-      selectedDifference.type === 'deletion'
-        ? selectedContext.original
-        : selectedContext.proposed || selectedContext.original;
+    const selectedContextBaseText = buildExpandedContextText(
+      selectedDifference.type,
+      selectedContext.original,
+      selectedContext.proposed
+    );
     const selectedContextSnippet =
       selectedDifference.type === 'deletion'
         ? selectedDifference.originalText
