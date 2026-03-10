@@ -275,6 +275,8 @@ $providers = @(
   'Microsoft.ManagedIdentity',
   'Microsoft.Authorization',
   'Microsoft.Sql',
+  'Microsoft.Storage',
+  'Microsoft.DocumentDB',
   'Microsoft.KeyVault'
 )
 

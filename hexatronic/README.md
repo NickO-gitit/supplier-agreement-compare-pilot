@@ -174,6 +174,12 @@ The script:
 7. Grants deploy identity `Key Vault Secrets User`
 8. Outputs all GitHub Environment variables to apply
 
+Important:
+
+- Provider registration is subscription-scope (not resource-group scope).
+- If GitHub OIDC identity only has RG-scoped roles, it cannot register new providers.
+- Run bootstrap once with a subscription Owner for each new subscription.
+
 ## Deploy like a 5-year-old guide
 
 Imagine 4 buttons:

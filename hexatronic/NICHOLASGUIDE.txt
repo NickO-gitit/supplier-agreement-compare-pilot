@@ -69,10 +69,13 @@ az provider register --namespace Microsoft.OperationalInsights
 az provider register --namespace Microsoft.ManagedIdentity
 az provider register --namespace Microsoft.Authorization
 az provider register --namespace Microsoft.Sql
+az provider register --namespace Microsoft.Storage
+az provider register --namespace Microsoft.DocumentDB
+az provider register --namespace Microsoft.AppConfiguration
 
 Check status:
 
-for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.Sql; do
+for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.Sql Microsoft.Storage Microsoft.DocumentDB Microsoft.AppConfiguration; do
 echo -n "$ns: "
 az provider show --namespace $ns --query registrationState -o tsv
 done
@@ -166,7 +169,7 @@ Cause:
 AZURE_CLIENT_ID and AZURE_TENANT_ID mismatch
 Fix:
 Re-copy both from the same App Registration Overview page.
-Error: MissingSubscriptionRegistration (Microsoft.ContainerRegistry)
+Error: MissingSubscriptionRegistration (Microsoft.ContainerRegistry / Microsoft.Storage / Microsoft.DocumentDB)
 Cause:
 
 Provider not registered in subscription
@@ -188,10 +191,13 @@ If workflow fails with MissingSubscriptionRegistration, run in Azure Cloud Shell
   az provider register --namespace Microsoft.ManagedIdentity
   az provider register --namespace Microsoft.Authorization
   az provider register --namespace Microsoft.Sql
+  az provider register --namespace Microsoft.Storage
+  az provider register --namespace Microsoft.DocumentDB
+  az provider register --namespace Microsoft.AppConfiguration
 
 Check status:
 
-  for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.Sql; do
+  for ns in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.Sql Microsoft.Storage Microsoft.DocumentDB Microsoft.AppConfiguration; do
     echo -n "$ns: "
     az provider show --namespace $ns --query registrationState -o tsv
   done

@@ -90,11 +90,17 @@ jobs:
             echo "$namespace registration state: $state"
             if [[ "$state" != "Registered" ]]; then
               echo "Registering $namespace..."
-              az provider register --namespace "$namespace" --wait
+              if ! az provider register --namespace "$namespace" --wait; then
+                echo "Provider registration failed for $namespace."
+                echo "This action requires subscription-level permission: ${namespace}/register/action."
+                echo "Run once as subscription Owner:"
+                echo "  az provider register --namespace $namespace --wait"
+              fi
             fi
             state=$(az provider show --namespace "$namespace" --query registrationState -o tsv)
             if [[ "$state" != "Registered" ]]; then
               echo "Provider $namespace is not registered (state: $state)"
+              echo "Ask a subscription Owner to register it, then rerun the workflow."
               exit 1
             fi
           }
