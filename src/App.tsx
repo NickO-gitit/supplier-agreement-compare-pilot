@@ -536,6 +536,7 @@ function App() {
     original: { processing: false, progress: 0, error: null },
     proposed: { processing: false, progress: 0, error: null },
   });
+  const [uploadDefaultOriginalSuppressed, setUploadDefaultOriginalSuppressed] = useState(false);
   const [uploadCustomerId, setUploadCustomerId] = useState('');
   const [uploadAddingCustomer, setUploadAddingCustomer] = useState(false);
   const [uploadNewCustomerName, setUploadNewCustomerName] = useState('');
@@ -626,10 +627,21 @@ function App() {
   }, [customers, route, uploadCustomerId]);
 
   useEffect(() => {
-    if (route.type === 'upload' && defaultOriginal && !originalDocument) {
+    if (route.type === 'upload') {
+      setUploadDefaultOriginalSuppressed(false);
+    }
+  }, [route.type]);
+
+  useEffect(() => {
+    if (
+      route.type === 'upload' &&
+      defaultOriginal &&
+      !originalDocument &&
+      !uploadDefaultOriginalSuppressed
+    ) {
       setOriginalDocument(asOriginalDocument(defaultOriginal));
     }
-  }, [defaultOriginal, originalDocument, route]);
+  }, [defaultOriginal, originalDocument, route, uploadDefaultOriginalSuppressed]);
 
   const comparisonsByCustomer = useMemo(() => {
     const grouped: Record<string, Comparison[]> = {};
@@ -769,6 +781,7 @@ function App() {
         };
 
         if (kind === 'original') {
+          setUploadDefaultOriginalSuppressed(true);
           setOriginalDocument(doc);
         } else {
           setProposedDocument(doc);
@@ -1549,6 +1562,7 @@ function App() {
   const removeDefaultOriginal = useCallback(() => {
     clearDefaultOriginalAgreement();
     setDefaultOriginal(null);
+    setUploadDefaultOriginalSuppressed(false);
   }, []);
 
   const handleDeleteComparisonFromSettings = useCallback(
@@ -1592,7 +1606,10 @@ function App() {
                 value={originalDocument}
                 upload={uploadState.original}
                 showDefaultBadge={!!defaultOriginal && originalDocument?.id === defaultOriginal.id}
-                onClear={() => setOriginalDocument(null)}
+                onClear={() => {
+                  setUploadDefaultOriginalSuppressed(true);
+                  setOriginalDocument(null);
+                }}
                 onPick={() => fileInputRefs.current.original?.click()}
                 onDropFile={(file) => void handleFile(file, 'original')}
               />
