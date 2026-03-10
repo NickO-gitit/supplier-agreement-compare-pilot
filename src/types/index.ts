@@ -87,7 +87,8 @@ export interface Note {
 
 export interface Comparison {
   id: string;
-  customerId: string;
+  projectId: string;
+  customerId?: string; // Legacy compatibility for previously stored data
   title?: string | null;
   originalDocument: Document | null;
   proposedDocument: Document | null;
@@ -111,15 +112,18 @@ export interface ComparisonSummary {
   lowRiskCount: number;
 }
 
-export type CustomerColor = 'blue' | 'emerald' | 'violet' | 'orange' | 'rose' | 'cyan';
+export type ProjectColor = 'blue' | 'emerald' | 'violet' | 'orange' | 'rose' | 'cyan';
 
-export interface Customer {
+export interface Project {
   id: string;
   name: string;
-  color: CustomerColor;
+  color: ProjectColor;
   initials: string;
   createdAt: Date;
 }
+
+export type CustomerColor = ProjectColor; // Legacy compatibility
+export type Customer = Project; // Legacy compatibility
 
 export type ChangeResponseStatus = 'pending' | 'accepted' | 'countered' | 'rejected' | 'ignored';
 

@@ -29,8 +29,8 @@ import type {
   ChangeResponse,
   ChangeResponseStatus,
   Comparison,
-  Customer,
-  CustomerColor,
+  Project,
+  ProjectColor,
   DefaultOriginalAgreement,
   Difference,
   Document,
@@ -41,14 +41,14 @@ import { extractText, getFileType } from './services/extractText';
 import { analyzeAllRisks, analyzeRiskExpanded, askRiskFollowUp, isConfigured } from './services/riskAnalysis';
 import {
   clearDefaultOriginalAgreement,
-  createCustomer,
+  createProject,
   deleteComparison,
   deriveInitials,
   generateId,
   hydrateFromBackend,
   getChangeResponsesForComparison,
   getComparisons,
-  getCustomers,
+  getProjects,
   getDefaultOriginalAgreement,
   saveChangeResponse,
   saveComparison,
@@ -56,8 +56,8 @@ import {
 } from './services/storage';
 
 type AppRoute =
-  | { type: 'upload'; customerId: string | null }
-  | { type: 'customer'; customerId: string }
+  | { type: 'upload'; projectId: string | null }
+  | { type: 'project'; projectId: string }
   | { type: 'review'; comparisonId: string }
   | { type: 'settings' };
 
@@ -90,7 +90,7 @@ type ExportRow = {
   comment: string;
 };
 
-const COLOR_BADGE_CLASS: Record<CustomerColor, string> = {
+const COLOR_BADGE_CLASS: Record<ProjectColor, string> = {
   blue: 'bg-blue-600',
   emerald: 'bg-emerald-600',
   violet: 'bg-violet-600',
@@ -111,21 +111,21 @@ function parseRoute(pathname: string, search: string): AppRoute {
     return { type: 'review', comparisonId: decodeURIComponent(reviewMatch[1]) };
   }
 
-  const customerMatch = pathname.match(/^\/customers\/([^/]+)$/);
-  if (customerMatch) {
-    return { type: 'customer', customerId: decodeURIComponent(customerMatch[1]) };
+  const projectMatch = pathname.match(/^\/projects\/([^/]+)$/) || pathname.match(/^\/customers\/([^/]+)$/);
+  if (projectMatch) {
+    return { type: 'project', projectId: decodeURIComponent(projectMatch[1]) };
   }
 
   const params = new URLSearchParams(search);
-  const customerId = params.get('customer');
-  return { type: 'upload', customerId: customerId || null };
+  const projectId = params.get('project') || params.get('customer');
+  return { type: 'upload', projectId: projectId || null };
 }
 
 function toRoutePath(route: AppRoute): string {
   if (route.type === 'settings') return '/settings';
   if (route.type === 'review') return `/comparisons/${encodeURIComponent(route.comparisonId)}/review`;
-  if (route.type === 'customer') return `/customers/${encodeURIComponent(route.customerId)}`;
-  return route.customerId ? `/?customer=${encodeURIComponent(route.customerId)}` : '/';
+  if (route.type === 'project') return `/projects/${encodeURIComponent(route.projectId)}`;
+  return route.projectId ? `/?project=${encodeURIComponent(route.projectId)}` : '/';
 }
 
 function bytesToLabel(sizeBytes?: number): string {
@@ -383,14 +383,14 @@ function App() {
     search: window.location.search,
   });
 
-  const [customers, setCustomers] = useState<Customer[]>(() => getCustomers());
+  const [projects, setProjects] = useState<Project[]>(() => getProjects());
   const [comparisons, setComparisons] = useState<Comparison[]>(() => getComparisons());
   const [defaultOriginal, setDefaultOriginal] = useState<DefaultOriginalAgreement | null>(() =>
     getDefaultOriginalAgreement()
   );
 
   const [sidebarAdding, setSidebarAdding] = useState(false);
-  const [sidebarCustomerName, setSidebarCustomerName] = useState('');
+  const [sidebarProjectName, setSidebarProjectName] = useState('');
 
   const [originalDocument, setOriginalDocument] = useState<Document | null>(null);
   const [proposedDocument, setProposedDocument] = useState<Document | null>(null);
@@ -399,9 +399,9 @@ function App() {
     proposed: { processing: false, progress: 0, error: null },
   });
   const [uploadDefaultOriginalSuppressed, setUploadDefaultOriginalSuppressed] = useState(false);
-  const [uploadCustomerId, setUploadCustomerId] = useState('');
-  const [uploadAddingCustomer, setUploadAddingCustomer] = useState(false);
-  const [uploadNewCustomerName, setUploadNewCustomerName] = useState('');
+  const [uploadProjectId, setUploadProjectId] = useState('');
+  const [uploadAddingProject, setUploadAddingProject] = useState(false);
+  const [uploadNewProjectName, setUploadNewProjectName] = useState('');
   const [uploadComparisonTitle, setUploadComparisonTitle] = useState('');
   const [compareError, setCompareError] = useState<string | null>(null);
   const [isComparing, setIsComparing] = useState(false);
@@ -448,7 +448,7 @@ function App() {
     setPathState({ pathname: window.location.pathname, search: window.location.search });
   }, []);
 
-  const refreshCustomers = useCallback(() => setCustomers(getCustomers()), []);
+  const refreshProjects = useCallback(() => setProjects(getProjects()), []);
   const refreshComparisons = useCallback(() => setComparisons(getComparisons()), []);
 
   useEffect(() => {
@@ -463,7 +463,7 @@ function App() {
     const runHydration = async () => {
       await hydrateFromBackend();
       if (!active) return;
-      setCustomers(getCustomers());
+      setProjects(getProjects());
       setComparisons(getComparisons());
       setDefaultOriginal(getDefaultOriginalAgreement());
     };
@@ -476,19 +476,19 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (customers.length === 0) {
-      setUploadCustomerId('');
+    if (projects.length === 0) {
+      setUploadProjectId('');
       return;
     }
 
     if (route.type === 'upload') {
-      if (route.customerId && customers.some((entry) => entry.id === route.customerId)) {
-        setUploadCustomerId(route.customerId);
-      } else if (!uploadCustomerId || !customers.some((entry) => entry.id === uploadCustomerId)) {
-        setUploadCustomerId(customers[0].id);
+      if (route.projectId && projects.some((entry) => entry.id === route.projectId)) {
+        setUploadProjectId(route.projectId);
+      } else if (!uploadProjectId || !projects.some((entry) => entry.id === uploadProjectId)) {
+        setUploadProjectId(projects[0].id);
       }
     }
-  }, [customers, route, uploadCustomerId]);
+  }, [projects, route, uploadProjectId]);
 
   useEffect(() => {
     if (route.type === 'upload') {
@@ -507,46 +507,46 @@ function App() {
     }
   }, [defaultOriginal, originalDocument, route, uploadDefaultOriginalSuppressed]);
 
-  const comparisonsByCustomer = useMemo(() => {
+  const comparisonsByProject = useMemo(() => {
     const grouped: Record<string, Comparison[]> = {};
     comparisons.forEach((entry) => {
-      if (!entry.customerId) return;
-      grouped[entry.customerId] = grouped[entry.customerId] || [];
-      grouped[entry.customerId].push(entry);
+      if (!entry.projectId) return;
+      grouped[entry.projectId] = grouped[entry.projectId] || [];
+      grouped[entry.projectId].push(entry);
     });
     return grouped;
   }, [comparisons]);
 
-  const pendingByCustomer = useMemo(() => {
+  const pendingByProject = useMemo(() => {
     const counts: Record<string, number> = {};
-    customers.forEach((customer) => {
-      counts[customer.id] = (comparisonsByCustomer[customer.id] || []).filter(
+    projects.forEach((project) => {
+      counts[project.id] = (comparisonsByProject[project.id] || []).filter(
         (entry) => entry.status === 'pending_review'
       ).length;
     });
     return counts;
-  }, [comparisonsByCustomer, customers]);
+  }, [comparisonsByProject, projects]);
 
   const currentComparison = useMemo(() => {
     if (route.type !== 'review') return null;
     return comparisons.find((entry) => entry.id === route.comparisonId) || null;
   }, [comparisons, route]);
 
-  const currentCustomer = useMemo(() => {
-    if (route.type === 'customer') {
-      return customers.find((entry) => entry.id === route.customerId) || null;
+  const currentProject = useMemo(() => {
+    if (route.type === 'project') {
+      return projects.find((entry) => entry.id === route.projectId) || null;
     }
 
     if (route.type === 'review' && currentComparison) {
-      return customers.find((entry) => entry.id === currentComparison.customerId) || null;
+      return projects.find((entry) => entry.id === currentComparison.projectId) || null;
     }
 
-    if (route.type === 'upload' && uploadCustomerId) {
-      return customers.find((entry) => entry.id === uploadCustomerId) || null;
+    if (route.type === 'upload' && uploadProjectId) {
+      return projects.find((entry) => entry.id === uploadProjectId) || null;
     }
 
     return null;
-  }, [currentComparison, customers, route, uploadCustomerId]);
+  }, [currentComparison, projects, route, uploadProjectId]);
 
   const reviewDiffs = currentComparison?.differences || [];
   const reviewRisks = currentComparison?.riskAnalyses || [];
@@ -620,14 +620,14 @@ function App() {
     }
   }, [draftExcludeFromExport, draftStatus]);
 
-  const handleCreateCustomer = useCallback(
-    (name: string, onCreated?: (customer: Customer) => void) => {
+  const handleCreateProject = useCallback(
+    (name: string, onCreated?: (project: Project) => void) => {
       if (!name.trim()) return;
-      const created = createCustomer(name.trim());
-      refreshCustomers();
+      const created = createProject(name.trim());
+      refreshProjects();
       onCreated?.(created);
     },
-    [refreshCustomers]
+    [refreshProjects]
   );
 
   const setUploadStepState = useCallback((kind: UploadKind, patch: Partial<UploadState>) => {
@@ -722,7 +722,7 @@ function App() {
   );
 
   const handleCompare = useCallback(async () => {
-    if (!originalDocument || !proposedDocument || !uploadCustomerId) return;
+    if (!originalDocument || !proposedDocument || !uploadProjectId) return;
 
     setCompareError(null);
     setIsComparing(true);
@@ -731,7 +731,7 @@ function App() {
       const result = computeDiff(originalDocument.text, proposedDocument.text, 'word');
       const comparison: Comparison = {
         id: generateId(),
-        customerId: uploadCustomerId,
+        projectId: uploadProjectId,
         title: uploadComparisonTitle.trim() || null,
         originalDocument,
         proposedDocument,
@@ -755,7 +755,7 @@ function App() {
     } finally {
       setIsComparing(false);
     }
-  }, [navigate, originalDocument, proposedDocument, runRiskAnalysis, uploadComparisonTitle, uploadCustomerId, upsertComparison]);
+  }, [navigate, originalDocument, proposedDocument, runRiskAnalysis, uploadComparisonTitle, uploadProjectId, upsertComparison]);
 
   const saveCurrentResponse = useCallback(async () => {
     if (!currentComparison || !selectedDifference || !draftStatus) return;
@@ -968,7 +968,7 @@ function App() {
     const generatedAt = new Date();
     const generatedIso = generatedAt.toISOString();
     const generatedDisplay = generatedAt.toLocaleString();
-    const customerName = currentCustomer?.name || 'N/A';
+    const projectName = currentProject?.name || 'N/A';
     const originalName = currentComparison.originalDocument?.name || 'N/A';
     const proposedName = currentComparison.proposedDocument?.name || 'N/A';
     const noteText = normalizeEmailText(coverNote || DEFAULT_NOTE).trim() || DEFAULT_NOTE;
@@ -1000,7 +1000,7 @@ function App() {
     };
 
     const metadataRows: Array<[string, string, string, string]> = [
-      ['Customer', customerName, 'Original file', originalName],
+      ['Project', projectName, 'Original file', originalName],
       ['Proposed file', proposedName, 'Generated', generatedDisplay],
     ];
 
@@ -1074,7 +1074,7 @@ function App() {
 </div></body></html>`;
 
       const emlContent = [
-        `Subject: Supplier Response - ${customerName}`,
+        `Subject: Supplier Response - ${projectName}`,
         'MIME-Version: 1.0',
         'Content-Type: text/html; charset=UTF-8',
         'Content-Transfer-Encoding: 8bit',
@@ -1409,13 +1409,13 @@ function App() {
       `supplier-response-${currentComparison.id}.docx`
     );
     setExportOpen(false);
-  }, [coverNote, currentComparison, currentCustomer?.name, exportFormat, responses]);
+  }, [coverNote, currentComparison, currentProject?.name, exportFormat, responses]);
 
   const exportVerboseLog = useCallback(() => {
     const payload = {
       generatedAt: new Date().toISOString(),
       route,
-      customers,
+      projects,
       comparisons,
       responses,
       answersByChange,
@@ -1429,7 +1429,7 @@ function App() {
     link.download = `agreement-verbose-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
     link.click();
     URL.revokeObjectURL(url);
-  }, [answersByChange, comparisons, customers, defaultOriginal, responses, route]);
+  }, [answersByChange, comparisons, projects, defaultOriginal, responses, route]);
 
   const uploadDefaultOriginal = useCallback(async (file: File) => {
     const fileType = getFileType(file);
@@ -1490,14 +1490,14 @@ function App() {
   );
 
   const renderUploadPage = () => {
-    const canCompare = !!(originalDocument && proposedDocument && uploadCustomerId && !isComparing);
+    const canCompare = !!(originalDocument && proposedDocument && uploadProjectId && !isComparing);
 
     return (
       <div className="px-8 py-6 bg-gray-50 h-full overflow-auto">
         <div className="max-w-5xl mx-auto space-y-6">
           <div>
             <h1 className="text-xl font-semibold text-gray-900">New Comparison</h1>
-            <p className="text-sm text-gray-500">Upload files, select customer, then run deterministic comparison.</p>
+            <p className="text-sm text-gray-500">Upload files, select a project, then run deterministic comparison.</p>
           </div>
 
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
@@ -1569,42 +1569,42 @@ function App() {
               />
             </div>
 
-            <label className="text-sm font-medium text-gray-700 block">Customer</label>
+            <label className="text-sm font-medium text-gray-700 block">Project</label>
             <select
-              value={uploadCustomerId}
+              value={uploadProjectId}
               onChange={(event) => {
                 const value = event.target.value;
                 if (value === '__new__') {
-                  setUploadAddingCustomer(true);
+                  setUploadAddingProject(true);
                   return;
                 }
-                setUploadCustomerId(value);
+                setUploadProjectId(value);
               }}
               className="w-full h-10 rounded border border-gray-300 bg-white px-3 text-sm"
             >
-              <option value="">Select customer</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
+              <option value="">Select project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
                 </option>
               ))}
-              <option value="__new__">+ New customer</option>
+              <option value="__new__">+ New project</option>
             </select>
 
-            {uploadAddingCustomer && (
+            {uploadAddingProject && (
               <div className="border border-gray-200 rounded p-3 bg-gray-50 flex flex-col sm:flex-row gap-2">
                 <input
-                  value={uploadNewCustomerName}
-                  onChange={(event) => setUploadNewCustomerName(event.target.value)}
-                  placeholder="Customer name"
+                  value={uploadNewProjectName}
+                  onChange={(event) => setUploadNewProjectName(event.target.value)}
+                  placeholder="Project name"
                   className="h-9 flex-1 rounded border border-gray-300 px-3 text-sm"
                 />
                 <button
                   onClick={() => {
-                    handleCreateCustomer(uploadNewCustomerName, (customer) => {
-                      setUploadCustomerId(customer.id);
-                      setUploadNewCustomerName('');
-                      setUploadAddingCustomer(false);
+                    handleCreateProject(uploadNewProjectName, (project) => {
+                      setUploadProjectId(project.id);
+                      setUploadNewProjectName('');
+                      setUploadAddingProject(false);
                     });
                   }}
                   className="h-9 px-3 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700"
@@ -1613,8 +1613,8 @@ function App() {
                 </button>
                 <button
                   onClick={() => {
-                    setUploadAddingCustomer(false);
-                    setUploadNewCustomerName('');
+                    setUploadAddingProject(false);
+                    setUploadNewProjectName('');
                   }}
                   className="h-9 px-3 border border-gray-200 text-gray-600 text-sm font-medium rounded hover:bg-gray-50"
                 >
@@ -1642,18 +1642,18 @@ function App() {
     );
   };
 
-  const renderCustomerPage = () => {
-    if (route.type !== 'customer') return null;
-    const customer = customers.find((entry) => entry.id === route.customerId);
-    if (!customer) {
+  const renderProjectPage = () => {
+    if (route.type !== 'project') return null;
+    const project = projects.find((entry) => entry.id === route.projectId);
+    if (!project) {
       return (
         <div className="px-8 py-6 bg-gray-50 h-full">
-          <p className="text-sm text-gray-500">Customer not found.</p>
+          <p className="text-sm text-gray-500">Project not found.</p>
         </div>
       );
     }
 
-    const list = (comparisonsByCustomer[customer.id] || []).slice().sort((a, b) => {
+    const list = (comparisonsByProject[project.id] || []).slice().sort((a, b) => {
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
@@ -1664,18 +1664,18 @@ function App() {
         <div className="max-w-6xl mx-auto space-y-6">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <span className={`w-10 h-10 rounded text-white text-sm font-bold flex items-center justify-center ${COLOR_BADGE_CLASS[customer.color]}`}>
-                {customer.initials || deriveInitials(customer.name)}
+              <span className={`w-10 h-10 rounded text-white text-sm font-bold flex items-center justify-center ${COLOR_BADGE_CLASS[project.color]}`}>
+                {project.initials || deriveInitials(project.name)}
               </span>
               <div>
-                <h1 className="text-xl font-semibold text-gray-900">{customer.name}</h1>
+                <h1 className="text-xl font-semibold text-gray-900">{project.name}</h1>
                 <p className="text-sm text-gray-500">
                   {list.length} comparison{list.length === 1 ? '' : 's'}{pending > 0 ? ` • ${pending} pending review` : ''}
                 </p>
               </div>
             </div>
             <button
-              onClick={() => navigate({ type: 'upload', customerId: customer.id })}
+              onClick={() => navigate({ type: 'upload', projectId: project.id })}
               className="h-10 px-4 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700"
             >
               + New Comparison
@@ -1807,7 +1807,7 @@ function App() {
         <div className="max-w-3xl mx-auto space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold text-gray-900">{currentCustomer?.name || 'Review'}</h1>
+              <h1 className="text-xl font-semibold text-gray-900">{currentProject?.name || 'Review'}</h1>
               <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl">
                 <FileNamePill label="Original" value={currentComparison.originalDocument?.name || 'N/A'} />
                 <FileNamePill label="Proposed" value={currentComparison.proposedDocument?.name || 'N/A'} />
@@ -2163,8 +2163,8 @@ function App() {
             <div className="relative w-full max-w-md rounded-lg shadow-2xl border border-gray-200 bg-white">
               <div className="px-6 py-4 border-b border-gray-100">
                 <h3 className="font-semibold text-gray-800">Export Supplier Response</h3>
-                <p className="text-sm text-gray-500 truncate" title={`${currentCustomer?.name} • ${currentComparison.proposedDocument?.name}`}>
-                  {currentCustomer?.name} • {currentComparison.proposedDocument?.name}
+                <p className="text-sm text-gray-500 truncate" title={`${currentProject?.name} • ${currentComparison.proposedDocument?.name}`}>
+                  {currentProject?.name} • {currentComparison.proposedDocument?.name}
                 </p>
               </div>
               <div className="px-6 py-4 space-y-4">
@@ -2256,8 +2256,8 @@ function App() {
               ) : (
                 <div className="space-y-2">
                   {settingsComparisons.map((comparison) => {
-                    const customerName =
-                      customers.find((entry) => entry.id === comparison.customerId)?.name || 'Unknown customer';
+                    const ProjectName =
+                      projects.find((entry) => entry.id === comparison.projectId)?.name || 'Unknown project';
                     return (
                       <div key={comparison.id} className="border border-gray-200 rounded p-3 flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -2265,7 +2265,7 @@ function App() {
                             {comparison.title || comparison.proposedDocument?.name || 'Untitled comparison'}
                           </p>
                           <p className="text-xs text-gray-500 mt-1">
-                            {customerName} • {new Date(comparison.createdAt).toLocaleString()} • {comparison.differences.length} changes
+                            {ProjectName} • {new Date(comparison.createdAt).toLocaleString()} • {comparison.differences.length} changes
                           </p>
                         </div>
                         <button
@@ -2302,28 +2302,28 @@ function App() {
     <div className="h-screen w-full flex overflow-hidden">
       <aside className="w-72 bg-gray-900 border-r border-gray-700 flex flex-col">
         <div className="px-4 py-4 border-b border-gray-700"><div className="flex items-center gap-2"><div className="bg-indigo-500 w-6 h-6 rounded flex items-center justify-center text-white"><Building2 className="w-4 h-4" /></div><span className="font-semibold text-white text-sm">Agreement Compare</span></div></div>
-        <div className="px-3 pt-4 pb-2"><p className="text-xs font-bold uppercase tracking-widest text-gray-500">Customers</p></div>
+        <div className="px-3 pt-4 pb-2"><p className="text-xs font-bold uppercase tracking-widest text-gray-500">Projects</p></div>
         <nav className="px-3 flex-1 overflow-auto space-y-1">
-          {customers.map((customer) => {
-            const active = (route.type === 'customer' && route.customerId === customer.id) || (route.type === 'review' && currentComparison?.customerId === customer.id) || (route.type === 'upload' && uploadCustomerId === customer.id);
-            const pending = pendingByCustomer[customer.id] || 0;
+          {projects.map((project) => {
+            const active = (route.type === 'project' && route.projectId === project.id) || (route.type === 'review' && currentComparison?.projectId === project.id) || (route.type === 'upload' && uploadProjectId === project.id);
+            const pending = pendingByProject[project.id] || 0;
             return (
-              <button key={customer.id} onClick={() => navigate({ type: 'customer', customerId: customer.id })} className={`w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-sm flex items-center gap-2 ${active ? 'bg-gray-700 text-white' : ''}`}>
-                <span className={`w-6 h-6 rounded text-xs font-bold text-white flex items-center justify-center ${COLOR_BADGE_CLASS[customer.color]}`}>{customer.initials || deriveInitials(customer.name)}</span>
-                <span className="truncate flex-1">{customer.name}</span>
+              <button key={project.id} onClick={() => navigate({ type: 'project', projectId: project.id })} className={`w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-sm flex items-center gap-2 ${active ? 'bg-gray-700 text-white' : ''}`}>
+                <span className={`w-6 h-6 rounded text-xs font-bold text-white flex items-center justify-center ${COLOR_BADGE_CLASS[project.color]}`}>{project.initials || deriveInitials(project.name)}</span>
+                <span className="truncate flex-1">{project.name}</span>
                 {pending > 0 && <span className="bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">{pending}</span>}
               </button>
             );
           })}
 
           {!sidebarAdding ? (
-            <button onClick={() => setSidebarAdding(true)} className="w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-sm border border-dashed border-gray-700">+ Add customer</button>
+            <button onClick={() => setSidebarAdding(true)} className="w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-sm border border-dashed border-gray-700">+ Add project</button>
           ) : (
             <div className="border border-gray-700 rounded p-2 space-y-2">
-              <input value={sidebarCustomerName} onChange={(e) => setSidebarCustomerName(e.target.value)} className="w-full h-8 rounded bg-gray-800 border border-gray-700 text-gray-100 px-2 text-sm" placeholder="Customer name" />
+              <input value={sidebarProjectName} onChange={(e) => setSidebarProjectName(e.target.value)} className="w-full h-8 rounded bg-gray-800 border border-gray-700 text-gray-100 px-2 text-sm" placeholder="Project name" />
               <div className="flex items-center gap-2">
-                <button onClick={() => handleCreateCustomer(sidebarCustomerName, (customer) => { setSidebarCustomerName(''); setSidebarAdding(false); navigate({ type: 'customer', customerId: customer.id }); })} className="h-8 px-2 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">Add</button>
-                <button onClick={() => { setSidebarAdding(false); setSidebarCustomerName(''); }} className="h-8 px-2 border border-gray-700 text-gray-300 text-xs font-medium rounded hover:bg-gray-800">✕</button>
+                <button onClick={() => handleCreateProject(sidebarProjectName, (project) => { setSidebarProjectName(''); setSidebarAdding(false); navigate({ type: 'project', projectId: project.id }); })} className="h-8 px-2 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">Add</button>
+                <button onClick={() => { setSidebarAdding(false); setSidebarProjectName(''); }} className="h-8 px-2 border border-gray-700 text-gray-300 text-xs font-medium rounded hover:bg-gray-800">✕</button>
               </div>
             </div>
           )}
@@ -2354,7 +2354,7 @@ function App() {
 
       <main className="flex-1 min-w-0">
         {route.type === 'upload' && renderUploadPage()}
-        {route.type === 'customer' && renderCustomerPage()}
+        {route.type === 'project' && renderProjectPage()}
         {route.type === 'review' && renderReviewPage()}
         {route.type === 'settings' && renderSettingsPage()}
       </main>
@@ -2460,3 +2460,4 @@ function FileNamePill({ label, value }: FileNamePillProps) {
 }
 
 export default App;
+
