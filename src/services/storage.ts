@@ -82,6 +82,7 @@ export function getComparisons(): Comparison[] {
       })),
       changeResponses: (c.changeResponses || []).map((response) => ({
         ...response,
+        excludeFromExport: !!response.excludeFromExport,
         createdAt: parseDate(response.createdAt),
         updatedAt: parseDate(response.updatedAt),
       })),
@@ -304,6 +305,7 @@ export function getChangeResponsesForComparison(comparisonId: string): ChangeRes
   const responses = all[comparisonId] || [];
   return responses.map((entry) => ({
     ...entry,
+    excludeFromExport: !!entry.excludeFromExport,
     createdAt: parseDate(entry.createdAt),
     updatedAt: parseDate(entry.updatedAt),
   }));
@@ -313,7 +315,8 @@ export function saveChangeResponse(
   comparisonId: string,
   changeId: string,
   status: ChangeResponseStatus,
-  comment: string | null
+  comment: string | null,
+  options?: { excludeFromExport?: boolean }
 ): ChangeResponse {
   const all = getAllChangeResponses();
   const responses = (all[comparisonId] || []).map((entry) => ({
@@ -330,6 +333,10 @@ export function saveChangeResponse(
       ...responses[index],
       status,
       comment,
+      excludeFromExport:
+        status === 'ignored'
+          ? !!options?.excludeFromExport
+          : false,
       updatedAt: now,
     };
   } else {
@@ -339,6 +346,10 @@ export function saveChangeResponse(
       changeId,
       status,
       comment,
+      excludeFromExport:
+        status === 'ignored'
+          ? !!options?.excludeFromExport
+          : false,
       createdAt: now,
       updatedAt: now,
     });

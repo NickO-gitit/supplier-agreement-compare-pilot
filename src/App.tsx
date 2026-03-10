@@ -174,6 +174,10 @@ function responseForChange(responses: ChangeResponse[], changeId: string): Chang
   return responses.find((entry) => entry.changeId === changeId)?.status || 'pending';
 }
 
+function responseEntryForChange(responses: ChangeResponse[], changeId: string): ChangeResponse | null {
+  return responses.find((entry) => entry.changeId === changeId) || null;
+}
+
 function reviewStatusForComparison(comparison: Comparison, responses: ChangeResponse[]): Comparison {
   const reviewed = comparison.differences.filter(
     (difference) => responseForChange(responses, difference.id) !== 'pending'
@@ -409,6 +413,7 @@ function App() {
   const [responses, setResponses] = useState<ChangeResponse[]>([]);
   const [draftStatus, setDraftStatus] = useState<DraftStatus>(null);
   const [draftComment, setDraftComment] = useState('');
+  const [draftExcludeFromExport, setDraftExcludeFromExport] = useState(false);
   const [draftReadOnly, setDraftReadOnly] = useState(false);
   const [savingResponse, setSavingResponse] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
@@ -586,6 +591,7 @@ function App() {
     if (!selectedDifference) {
       setDraftStatus(null);
       setDraftComment('');
+      setDraftExcludeFromExport(false);
       setDraftReadOnly(false);
       setExpandedRiskError(null);
       return;
@@ -595,6 +601,7 @@ function App() {
     if (!existing) {
       setDraftStatus(null);
       setDraftComment('');
+      setDraftExcludeFromExport(false);
       setDraftReadOnly(false);
       setExpandedRiskError(null);
       return;
@@ -602,9 +609,16 @@ function App() {
 
     setDraftStatus(existing.status === 'pending' ? null : existing.status);
     setDraftComment(existing.comment || '');
+    setDraftExcludeFromExport(!!existing.excludeFromExport);
     setDraftReadOnly(true);
     setExpandedRiskError(null);
   }, [responses, selectedDifference?.id]);
+
+  useEffect(() => {
+    if (draftStatus !== 'ignored' && draftExcludeFromExport) {
+      setDraftExcludeFromExport(false);
+    }
+  }, [draftExcludeFromExport, draftStatus]);
 
   const handleCreateCustomer = useCallback(
     (name: string, onCreated?: (customer: Customer) => void) => {
@@ -752,7 +766,13 @@ function App() {
 
     setSavingResponse(true);
     try {
-      saveChangeResponse(currentComparison.id, selectedDifference.id, draftStatus, comment || null);
+      saveChangeResponse(
+        currentComparison.id,
+        selectedDifference.id,
+        draftStatus,
+        comment || null,
+        { excludeFromExport: draftStatus === 'ignored' ? draftExcludeFromExport : false }
+      );
       const nextResponses = getChangeResponsesForComparison(currentComparison.id);
       setResponses(nextResponses);
 
@@ -776,7 +796,15 @@ function App() {
     } finally {
       setSavingResponse(false);
     }
-  }, [currentComparison, draftComment, draftStatus, reviewIndex, selectedDifference, upsertComparison]);
+  }, [
+    currentComparison,
+    draftComment,
+    draftExcludeFromExport,
+    draftStatus,
+    reviewIndex,
+    selectedDifference,
+    upsertComparison,
+  ]);
 
   const setManualRiskClassification = useCallback(
     (differenceId: string, level: 'low' | 'medium' | 'high') => {
@@ -945,8 +973,13 @@ function App() {
     const proposedName = currentComparison.proposedDocument?.name || 'N/A';
     const noteText = normalizeEmailText(coverNote || DEFAULT_NOTE).trim() || DEFAULT_NOTE;
 
-    const exportRows: ExportRow[] = currentComparison.differences.map((difference, index) => {
-      const response = responses.find((entry) => entry.changeId === difference.id);
+    const exportableDifferences = currentComparison.differences.filter((difference) => {
+      const response = responseEntryForChange(responses, difference.id);
+      return !(response?.status === 'ignored' && response.excludeFromExport);
+    });
+
+    const exportRows: ExportRow[] = exportableDifferences.map((difference, index) => {
+      const response = responseEntryForChange(responses, difference.id);
       const risk = riskForChange(currentComparison.riskAnalyses, difference.id);
       return {
         index: index + 1,
@@ -1746,7 +1779,12 @@ function App() {
         ? selectedRisk.autoRiskLevel || selectedRisk.riskLevel
         : selectedRisk?.riskLevel || riskLevel;
     const followUps = answersByChange[selectedDifference.id] || [];
-    const submittedResponse = responses.find((entry) => entry.changeId === selectedDifference.id) || null;
+    const submittedResponse = responseEntryForChange(responses, selectedDifference.id);
+    const excludedIgnoredCount = reviewDiffs.filter((difference) => {
+      const response = responseEntryForChange(responses, difference.id);
+      return response?.status === 'ignored' && response.excludeFromExport;
+    }).length;
+    const exportableCount = Math.max(0, reviewDiffs.length - excludedIgnoredCount);
     const requiresComment = draftStatus === 'countered' || draftStatus === 'rejected';
     const canSave = !!draftStatus && (!requiresComment || !!draftComment.trim()) && !savingResponse;
     const analysisPercent =
@@ -1970,6 +2008,14 @@ function App() {
                         : 'No comment was included for this response.'}
                     </p>
                   </div>
+                  {status === 'ignored' && (
+                    <div className="text-xs text-gray-500">
+                      Export behavior:{' '}
+                      <span className="font-medium text-gray-700">
+                        {draftExcludeFromExport ? 'Excluded from future exports' : 'Included in exports'}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -1992,12 +2038,30 @@ function App() {
                           : 'Optional note'}
                       </label>
                       <textarea value={draftComment} onChange={(e) => setDraftComment(e.target.value)} rows={4} className="w-full rounded border border-gray-300 px-3 py-2 text-sm" placeholder={draftStatus === 'countered' ? 'Describe the alternative wording you propose...' : draftStatus === 'rejected' ? 'Explain why this change cannot be accepted...' : draftStatus === 'ignored' ? 'Optional note on why this change is being ignored (for example formatting-only change).' : 'Optional note to the supplier...'} />
+                      {draftStatus === 'ignored' && (
+                        <div className="mt-3 flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                          <p className="text-xs text-slate-700">
+                            Remove this ignored change from future exports.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setDraftExcludeFromExport((value) => !value)}
+                            className={`h-8 px-3 rounded text-xs font-medium border ${
+                              draftExcludeFromExport
+                                ? 'bg-slate-700 border-slate-700 text-white'
+                                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                            }`}
+                          >
+                            {draftExcludeFromExport ? 'Excluded' : 'Keep in export'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   <div className="flex items-center gap-2">
                     <button disabled={!canSave} onClick={saveCurrentResponse} className={`h-10 px-4 rounded text-sm font-medium ${canSave ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-200 text-white opacity-40 cursor-not-allowed'}`}>{savingResponse ? 'Saving...' : 'Save & continue →'}</button>
-                    <button onClick={() => { setDraftStatus(null); setDraftComment(''); setDraftReadOnly(false); }} className="h-10 px-4 border border-gray-200 text-gray-600 text-sm font-medium rounded hover:bg-gray-50">Clear</button>
+                    <button onClick={() => { setDraftStatus(null); setDraftComment(''); setDraftExcludeFromExport(false); setDraftReadOnly(false); }} className="h-10 px-4 border border-gray-200 text-gray-600 text-sm font-medium rounded hover:bg-gray-50">Clear</button>
                   </div>
                 </>
               )}
@@ -2105,12 +2169,17 @@ function App() {
               </div>
               <div className="px-6 py-4 space-y-4">
                 <div className="grid grid-cols-5 gap-1 sm:gap-2 text-center text-xs">
-                  <StatCell label="Total" value={String(reviewDiffs.length)} />
+                  <StatCell label="Total (exported)" value={String(exportableCount)} />
                   <StatCell label="Accepted" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'accepted').length)} />
                   <StatCell label="Countered" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'countered').length)} />
                   <StatCell label="Rejected" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'rejected').length)} />
                   <StatCell label="Ignored" value={String(reviewDiffs.filter((entry) => responseForChange(responses, entry.id) === 'ignored').length)} />
                 </div>
+                {excludedIgnoredCount > 0 && (
+                  <div className="rounded border border-slate-200 bg-slate-50 text-slate-700 text-xs px-3 py-2">
+                    {excludedIgnoredCount} ignored change{excludedIgnoredCount === 1 ? '' : 's'} will be excluded from export.
+                  </div>
+                )}
                 {reviewedCount < reviewDiffs.length && <div className="rounded border border-amber-200 bg-amber-50 text-amber-700 text-xs px-3 py-2">{reviewDiffs.length - reviewedCount} changes remain pending.</div>}
                 <div>
                   <p className="text-sm font-medium text-gray-700 mb-1">Format</p>

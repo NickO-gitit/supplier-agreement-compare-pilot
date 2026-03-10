@@ -129,6 +129,7 @@ export interface ChangeResponse {
   changeId: string;
   status: ChangeResponseStatus;
   comment: string | null;
+  excludeFromExport?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
