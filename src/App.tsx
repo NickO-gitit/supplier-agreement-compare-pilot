@@ -536,6 +536,7 @@ function App() {
   const [uploadCustomerId, setUploadCustomerId] = useState('');
   const [uploadAddingCustomer, setUploadAddingCustomer] = useState(false);
   const [uploadNewCustomerName, setUploadNewCustomerName] = useState('');
+  const [uploadComparisonTitle, setUploadComparisonTitle] = useState('');
   const [compareError, setCompareError] = useState<string | null>(null);
   const [isComparing, setIsComparing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -830,6 +831,7 @@ function App() {
       const comparison: Comparison = {
         id: generateId(),
         customerId: uploadCustomerId,
+        title: uploadComparisonTitle.trim() || null,
         originalDocument,
         proposedDocument,
         differences: result.differences,
@@ -845,12 +847,13 @@ function App() {
       upsertComparison(comparison);
       navigate({ type: 'review', comparisonId: comparison.id });
       void runRiskAnalysis(comparison);
+      setUploadComparisonTitle('');
     } catch (error) {
       setCompareError(error instanceof Error ? error.message : 'Comparison failed.');
     } finally {
       setIsComparing(false);
     }
-  }, [navigate, originalDocument, proposedDocument, runRiskAnalysis, uploadCustomerId, upsertComparison]);
+  }, [navigate, originalDocument, proposedDocument, runRiskAnalysis, uploadComparisonTitle, uploadCustomerId, upsertComparison]);
 
   const saveCurrentResponse = useCallback(async () => {
     if (!currentComparison || !selectedDifference || !draftStatus) return;
@@ -1611,6 +1614,17 @@ function App() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Comparison Title (optional)</label>
+              <input
+                value={uploadComparisonTitle}
+                onChange={(event) => setUploadComparisonTitle(event.target.value)}
+                placeholder="e.g. Q2 Supplier Framework Update"
+                className="w-full h-10 rounded border border-gray-300 px-3 text-sm"
+                maxLength={120}
+              />
+            </div>
+
             <label className="text-sm font-medium text-gray-700 block">Customer</label>
             <select
               value={uploadCustomerId}
@@ -1732,6 +1746,7 @@ function App() {
               <thead className="bg-gray-50 text-gray-500">
                 <tr>
                   <th className="text-left px-6 py-3 font-medium">Date</th>
+                  <th className="text-left px-6 py-3 font-medium">Title</th>
                   <th className="text-left px-6 py-3 font-medium">Proposed File</th>
                   <th className="text-left px-6 py-3 font-medium">Changes</th>
                   <th className="text-left px-6 py-3 font-medium">Status</th>
@@ -1749,6 +1764,14 @@ function App() {
                   return (
                     <tr key={comparison.id} className="border-t border-gray-100">
                       <td className="px-6 py-3 text-gray-700">{new Date(comparison.createdAt).toLocaleString()}</td>
+                      <td className="px-6 py-3 text-gray-700">
+                        <span
+                          className="inline-block max-w-[20rem] whitespace-normal break-words leading-5 align-bottom"
+                          title={comparison.title || 'Untitled comparison'}
+                        >
+                          {comparison.title || <span className="text-gray-400">Untitled</span>}
+                        </span>
+                      </td>
                       <td className="px-6 py-3 text-gray-700">
                         <span
                           className="inline-block max-w-[32rem] whitespace-normal break-all leading-5 align-bottom"
@@ -1776,7 +1799,7 @@ function App() {
                 })}
                 {list.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-6 py-6 text-gray-500">No comparisons yet.</td>
+                    <td colSpan={6} className="px-6 py-6 text-gray-500">No comparisons yet.</td>
                   </tr>
                 )}
               </tbody>

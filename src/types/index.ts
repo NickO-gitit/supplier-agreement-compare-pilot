@@ -88,6 +88,7 @@ export interface Note {
 export interface Comparison {
   id: string;
   customerId: string;
+  title?: string | null;
   originalDocument: Document | null;
   proposedDocument: Document | null;
   differences: Difference[];

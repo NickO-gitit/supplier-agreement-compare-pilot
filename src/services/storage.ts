@@ -57,6 +57,7 @@ export function getComparisons(): Comparison[] {
       ...c,
       createdAt: parseDate(c.createdAt),
       customerId: c.customerId || '',
+      title: typeof c.title === 'string' && c.title.trim().length > 0 ? c.title : null,
       originalDocument: c.originalDocument
         ? {
             ...c.originalDocument,

@@ -172,7 +172,7 @@ function convertUnitsToDifferences(
       continue;
     }
 
-    if (isSuppressedNonMeaningfulModification(unit)) {
+    if (isSuppressedNonMeaningfulChange(unit)) {
       continue;
     }
 
@@ -233,7 +233,7 @@ export function generateDiffHTML(
       continue;
     }
 
-    if (isSuppressedNonMeaningfulModification(unit)) {
+    if (isSuppressedNonMeaningfulChange(unit)) {
       originalHTML += escapeHTML(unit.originalText || '');
       proposedHTML += escapeHTML(unit.proposedText || '');
       continue;
@@ -303,7 +303,7 @@ export function generateInlineDiffHTML(
       continue;
     }
 
-    if (isSuppressedNonMeaningfulModification(unit)) {
+    if (isSuppressedNonMeaningfulChange(unit)) {
       html += escapeHTML(unit.proposedText || unit.originalText || '');
       continue;
     }
@@ -1751,14 +1751,27 @@ function wrapDiffSpan(text: string, className: string, diffId: string): string {
   return `<span class="diff-segment ${className}" data-diff-id="${diffId}">${text}</span>`;
 }
 
-function isSuppressedNonMeaningfulModification(unit: DiffUnit): boolean {
-  if (unit.kind !== 'change' || unit.type !== 'modification') {
+function isSuppressedNonMeaningfulChange(unit: DiffUnit): boolean {
+  if (unit.kind !== 'change') {
     return false;
   }
 
-  const original = normalizeForMeaningfulComparison(unit.originalText || '');
-  const proposed = normalizeForMeaningfulComparison(unit.proposedText || '');
-  return original.length > 0 && proposed.length > 0 && original === proposed;
+  if (unit.type === 'addition') {
+    return normalizeForMeaningfulComparison(unit.proposedText || '').length === 0;
+  }
+
+  if (unit.type === 'deletion') {
+    return normalizeForMeaningfulComparison(unit.originalText || '').length === 0;
+  }
+
+  const original = normalizeForMeaningfulComparison(unit.originalText ?? '');
+  const proposed = normalizeForMeaningfulComparison(unit.proposedText ?? '');
+
+  if (original.length === 0 && proposed.length === 0) {
+    return true;
+  }
+
+  return original === proposed;
 }
 
 function normalizeForMeaningfulComparison(value: string): string {
@@ -1766,6 +1779,15 @@ function normalizeForMeaningfulComparison(value: string): string {
     .normalize('NFKC')
     .replace(/\u00A0/g, ' ')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
     .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/([A-Za-z0-9])\s*-\s*([A-Za-z0-9])/g, '$1-$2')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .replace(/\s+/g, ' ')
     .trim();
 }
