@@ -101,6 +101,7 @@ const COLOR_BADGE_CLASS: Record<CustomerColor, string> = {
 
 const DEFAULT_NOTE =
   'Thank you for sharing the proposed updates. Please find our clause-by-clause response attached.';
+const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'v1.0.0';
 
 function parseRoute(pathname: string, search: string): AppRoute {
   if (pathname === '/settings') return { type: 'settings' };
@@ -2410,7 +2411,7 @@ function App() {
 
         <div className="border-t border-gray-700 px-3 py-3 space-y-2">
           {route.type === 'review' && currentComparison && <button onClick={() => setExportOpen(true)} disabled={reviewedCount === 0} className={`w-full h-9 rounded text-sm font-medium ${reviewedCount === 0 ? 'text-gray-600 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>{reviewedCount === currentComparison.differences.length ? 'Export Response' : `Export (${reviewedCount}/${currentComparison.differences.length})`}</button>}
-          <button onClick={() => navigate({ type: 'settings' })} className={`w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-sm flex items-center gap-2 ${route.type === 'settings' ? 'bg-gray-700 text-white' : ''}`}><Settings className="w-4 h-4" />Settings</button>
+          <button onClick={() => navigate({ type: 'settings' })} className={`w-full text-left text-gray-400 hover:bg-gray-800 hover:text-gray-200 rounded px-2.5 py-2 text-sm flex items-center gap-2 ${route.type === 'settings' ? 'bg-gray-700 text-white' : ''}`}><Settings className="w-4 h-4" /><span>Settings</span><span className={`ml-auto text-[10px] font-semibold tabular-nums ${route.type === 'settings' ? 'text-gray-200' : 'text-gray-500'}`}>{APP_VERSION}</span></button>
         </div>
       </aside>
 
