@@ -32,6 +32,15 @@ param maxReplicas int
 param containerCpu string
 param containerMemory string
 param environmentName string
+param cosmosEndpoint string
+param cosmosDatabaseName string
+param cosmosContainerName string
+@secure()
+param cosmosKey string
+@secure()
+param appStorageBlobConnectionString string
+param appStorageBlobContainerName string = 'appstate'
+param appStorageBlobName string = 'app-storage.json'
 
 // ── Log Analytics Workspace ───────────────────────────────────
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
@@ -87,6 +96,37 @@ var baseEnvVars = [
   {
     name: 'APP_CONFIG_LABEL'
     value: environmentName
+  }
+]
+
+var storageEnvVars = [
+  {
+    name: 'COSMOS_ENDPOINT'
+    value: cosmosEndpoint
+  }
+  {
+    name: 'COSMOS_DATABASE_NAME'
+    value: cosmosDatabaseName
+  }
+  {
+    name: 'COSMOS_CONTAINER_NAME'
+    value: cosmosContainerName
+  }
+  {
+    name: 'COSMOS_KEY'
+    secretRef: 'cosmos-key'
+  }
+  {
+    name: 'APP_STORAGE_BLOB_CONNECTION_STRING'
+    secretRef: 'app-storage-blob-connection-string'
+  }
+  {
+    name: 'APP_STORAGE_BLOB_CONTAINER'
+    value: appStorageBlobContainerName
+  }
+  {
+    name: 'APP_STORAGE_BLOB_NAME'
+    value: appStorageBlobName
   }
 ]
 
@@ -186,6 +226,7 @@ var appInsightsEnvVars = [
 
 var allEnvVars = concat(
   baseEnvVars,
+  storageEnvVars,
   appInsightsEnvVars,
   dbEnvVar,
   foundryEnvVars,
@@ -204,6 +245,16 @@ var managedIdentityRegistry = !empty(containerRegistryServer) ? [
 
 var registries = managedIdentityRegistry
 var appSecrets = concat(
+  [
+    {
+      name: 'cosmos-key'
+      value: cosmosKey
+    }
+    {
+      name: 'app-storage-blob-connection-string'
+      value: appStorageBlobConnectionString
+    }
+  ],
   !empty(foundryApiKey) ? [
     {
       name: 'foundry-api-key'

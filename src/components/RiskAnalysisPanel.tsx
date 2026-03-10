@@ -68,14 +68,7 @@ export function RiskAnalysisPanel({
     return cleaned;
   };
 
-  const [riskOrderMode, setRiskOrderMode] = useState<'risk' | 'document'>(() => {
-    try {
-      const saved = localStorage.getItem('risk-order-mode');
-      return saved === 'document' ? 'document' : 'risk';
-    } catch {
-      return 'risk';
-    }
-  });
+  const [riskOrderMode, setRiskOrderMode] = useState<'risk' | 'document'>('risk');
   const [notesDiffId, setNotesDiffId] = useState<string | null>(null);
   const [followUpQuestion, setFollowUpQuestion] = useState('');
   const [isAskingFollowUp, setIsAskingFollowUp] = useState(false);
@@ -91,14 +84,6 @@ export function RiskAnalysisPanel({
     setFollowUpQuestion('');
     setFollowUpError(null);
   }, [selectedDiffId]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('risk-order-mode', riskOrderMode);
-    } catch {
-      // Ignore localStorage errors.
-    }
-  }, [riskOrderMode]);
 
   const selectedRisk = selectedDiffId
     ? riskAnalyses.find((r) => r.differenceId === selectedDiffId)

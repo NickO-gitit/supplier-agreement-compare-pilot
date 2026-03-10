@@ -122,6 +122,14 @@ var sqlServerName = '${prefix}-sql'
 var userIdentityName = '${prefix}-id'
 var acrNameBase = replace(toLower('${prefix}acr'), '-', '')
 var acrName = length(acrNameBase) < 5 ? 'acr${take(uniqueString(resourceGroup().id), 8)}' : take(acrNameBase, 50)
+var cosmosBase = replace(toLower('${prefix}cosmos'), '-', '')
+var cosmosAccountName = take('${cosmosBase}${take(uniqueString(resourceGroup().id), 8)}', 44)
+var cosmosDatabaseName = 'suppliercompare'
+var cosmosContainerName = 'appstate'
+var appStorageBase = replace(toLower('${prefix}st'), '-', '')
+var appStorageAccountName = take('${appStorageBase}${take(uniqueString(resourceGroup().id), 8)}', 24)
+var appStorageBlobContainerName = 'appstate'
+var appStorageBlobName = 'app-storage.json'
 
 // ── Azure Container Registry ────────────────────────────────
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -148,6 +156,78 @@ resource appConfiguration 'Microsoft.AppConfiguration/configurationStores@2023-0
   location: location
   sku: {
     name: 'standard'
+  }
+}
+
+// ── Cosmos DB (serverless) for app state ─────────────────────
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
+  name: cosmosAccountName
+  location: location
+  kind: 'GlobalDocumentDB'
+  properties: {
+    databaseAccountOfferType: 'Standard'
+    publicNetworkAccess: 'Enabled'
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+    ]
+    capabilities: [
+      {
+        name: 'EnableServerless'
+      }
+    ]
+  }
+}
+
+resource cosmosSqlDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2023-11-15' = {
+  name: '${cosmosAccount.name}/${cosmosDatabaseName}'
+  properties: {
+    resource: {
+      id: cosmosDatabaseName
+    }
+  }
+}
+
+resource cosmosSqlContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-11-15' = {
+  name: '${cosmosAccount.name}/${cosmosDatabaseName}/${cosmosContainerName}'
+  properties: {
+    resource: {
+      id: cosmosContainerName
+      partitionKey: {
+        paths: [
+          '/tenant'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+// ── Blob Storage for snapshot backup ─────────────────────────
+resource appStorageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: appStorageAccountName
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource appStorageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: '${appStorageAccount.name}/default/${appStorageBlobContainerName}'
+  properties: {
+    publicAccess: 'None'
   }
 }
 
@@ -190,6 +270,8 @@ module rolesModule 'roles.bicep' = if (deployRoles) {
 var resolvedConnectionString = !empty(existingDatabaseConnectionString)
   ? existingDatabaseConnectionString
   : (deploySql ? sqlModule!.outputs.connectionString : '')
+var cosmosKey = cosmosAccount.listKeys().primaryMasterKey
+var appStorageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${appStorageAccount.name};AccountKey=${appStorageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
 // ── Container Apps Module ─────────────────────────────────────
 module containerAppModule 'containerapps.bicep' = {
@@ -222,6 +304,13 @@ module containerAppModule 'containerapps.bicep' = {
     containerCpu: containerCpu
     containerMemory: containerMemory
     environmentName: environmentName
+    cosmosEndpoint: cosmosAccount.properties.documentEndpoint
+    cosmosDatabaseName: cosmosDatabaseName
+    cosmosContainerName: cosmosContainerName
+    cosmosKey: cosmosKey
+    appStorageBlobConnectionString: appStorageConnectionString
+    appStorageBlobContainerName: appStorageBlobContainerName
+    appStorageBlobName: appStorageBlobName
   }
 }
 

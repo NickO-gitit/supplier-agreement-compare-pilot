@@ -17,6 +17,19 @@ const CHANGE_RESPONSES_KEY = 'supplier-agreement-change-responses';
 const DEFAULT_ORIGINAL_KEY = 'supplier-agreement-default-original';
 const BACKEND_STORAGE_URL = '/api/storage';
 const CUSTOMER_COLORS: CustomerColor[] = ['blue', 'emerald', 'violet', 'orange', 'rose', 'cyan'];
+const memoryStore: Record<string, string> = {};
+
+function getStoredValue(key: string): string | null {
+  return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
+}
+
+function setStoredValue(key: string, value: string): void {
+  memoryStore[key] = value;
+}
+
+function removeStoredValue(key: string): void {
+  delete memoryStore[key];
+}
 
 function parseDate(value: unknown): Date {
   if (value instanceof Date) {
@@ -43,13 +56,13 @@ export function saveComparison(comparison: Comparison): void {
 
   // Keep only last 50 comparisons
   const trimmed = comparisons.slice(0, 50);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+  setStoredValue(STORAGE_KEY, JSON.stringify(trimmed));
   syncKeyToBackend(STORAGE_KEY);
 }
 
 export function getComparisons(): Comparison[] {
   try {
-    const data = localStorage.getItem(STORAGE_KEY);
+    const data = getStoredValue(STORAGE_KEY);
     if (!data) return [];
 
     const parsed = JSON.parse(data);
@@ -100,7 +113,7 @@ export function getComparison(id: string): Comparison | null {
 export function deleteComparison(id: string): void {
   const comparisons = getComparisons();
   const filtered = comparisons.filter((c) => c.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+  setStoredValue(STORAGE_KEY, JSON.stringify(filtered));
   syncKeyToBackend(STORAGE_KEY);
 
   // Also delete associated notes
@@ -120,7 +133,7 @@ export function saveNote(comparisonId: string, note: Note): void {
   }
 
   allNotes[comparisonId] = comparisonNotes;
-  localStorage.setItem(NOTES_KEY, JSON.stringify(allNotes));
+  setStoredValue(NOTES_KEY, JSON.stringify(allNotes));
   syncKeyToBackend(NOTES_KEY);
 }
 
@@ -139,20 +152,20 @@ export function deleteNote(comparisonId: string, noteId: string): void {
   const allNotes = getAllNotes();
   const comparisonNotes = allNotes[comparisonId] || [];
   allNotes[comparisonId] = comparisonNotes.filter((n) => n.id !== noteId);
-  localStorage.setItem(NOTES_KEY, JSON.stringify(allNotes));
+  setStoredValue(NOTES_KEY, JSON.stringify(allNotes));
   syncKeyToBackend(NOTES_KEY);
 }
 
 export function deleteNotesForComparison(comparisonId: string): void {
   const allNotes = getAllNotes();
   delete allNotes[comparisonId];
-  localStorage.setItem(NOTES_KEY, JSON.stringify(allNotes));
+  setStoredValue(NOTES_KEY, JSON.stringify(allNotes));
   syncKeyToBackend(NOTES_KEY);
 }
 
 function getAllNotes(): Record<string, Note[]> {
   try {
-    const data = localStorage.getItem(NOTES_KEY);
+    const data = getStoredValue(NOTES_KEY);
     if (!data) return {};
     return JSON.parse(data);
   } catch {
@@ -172,9 +185,9 @@ export interface APIConfig {
 export function saveAPIConfig(config: APIConfig): void {
   // Note: In production, you'd want to encrypt this or use a more secure method
   const serialized = JSON.stringify(config);
-  localStorage.setItem(API_CONFIG_KEY, serialized);
+  setStoredValue(API_CONFIG_KEY, serialized);
   // Write-through to legacy key for backwards compatibility across older builds.
-  localStorage.setItem(LEGACY_API_CONFIG_KEYS[0], serialized);
+  setStoredValue(LEGACY_API_CONFIG_KEYS[0], serialized);
   syncKeyToBackend(API_CONFIG_KEY);
   syncKeyToBackend(LEGACY_API_CONFIG_KEYS[0]);
 }
@@ -183,7 +196,7 @@ export function getAPIConfig(): APIConfig | null {
   try {
     const candidates = [API_CONFIG_KEY, ...LEGACY_API_CONFIG_KEYS];
     for (const key of candidates) {
-      const data = localStorage.getItem(key);
+      const data = getStoredValue(key);
       if (!data) continue;
       const parsed = JSON.parse(data);
       if (parsed && typeof parsed === 'object' && typeof parsed.apiKey === 'string') {
@@ -197,10 +210,10 @@ export function getAPIConfig(): APIConfig | null {
 }
 
 export function clearAPIConfig(): void {
-  localStorage.removeItem(API_CONFIG_KEY);
+  removeStoredValue(API_CONFIG_KEY);
   syncValueToBackend(API_CONFIG_KEY, null);
   for (const key of LEGACY_API_CONFIG_KEYS) {
-    localStorage.removeItem(key);
+    removeStoredValue(key);
     syncValueToBackend(key, null);
   }
 }
@@ -217,7 +230,7 @@ export function deriveInitials(name: string): string {
 
 export function getCustomers(): Customer[] {
   try {
-    const data = localStorage.getItem(CUSTOMERS_KEY);
+    const data = getStoredValue(CUSTOMERS_KEY);
     if (!data) return [];
     const parsed = JSON.parse(data) as Customer[];
     return parsed.map((customer) => ({
@@ -237,7 +250,7 @@ export function saveCustomer(customer: Customer): void {
   } else {
     customers.push(customer);
   }
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+  setStoredValue(CUSTOMERS_KEY, JSON.stringify(customers));
   syncKeyToBackend(CUSTOMERS_KEY);
 }
 
@@ -281,13 +294,13 @@ export function updateCustomer(
     initials: (update.initials || current.initials).slice(0, 2).toUpperCase(),
   };
   customers[index] = next;
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+  setStoredValue(CUSTOMERS_KEY, JSON.stringify(customers));
   return next;
 }
 
 function getAllChangeResponses(): Record<string, ChangeResponse[]> {
   try {
-    const data = localStorage.getItem(CHANGE_RESPONSES_KEY);
+    const data = getStoredValue(CHANGE_RESPONSES_KEY);
     if (!data) return {};
     return JSON.parse(data);
   } catch {
@@ -296,7 +309,7 @@ function getAllChangeResponses(): Record<string, ChangeResponse[]> {
 }
 
 function saveAllChangeResponses(payload: Record<string, ChangeResponse[]>): void {
-  localStorage.setItem(CHANGE_RESPONSES_KEY, JSON.stringify(payload));
+  setStoredValue(CHANGE_RESPONSES_KEY, JSON.stringify(payload));
   syncKeyToBackend(CHANGE_RESPONSES_KEY);
 }
 
@@ -368,13 +381,13 @@ export function clearChangeResponse(comparisonId: string, changeId: string): voi
 }
 
 export function saveDefaultOriginalAgreement(document: DefaultOriginalAgreement): void {
-  localStorage.setItem(DEFAULT_ORIGINAL_KEY, JSON.stringify(document));
+  setStoredValue(DEFAULT_ORIGINAL_KEY, JSON.stringify(document));
   syncKeyToBackend(DEFAULT_ORIGINAL_KEY);
 }
 
 export function getDefaultOriginalAgreement(): DefaultOriginalAgreement | null {
   try {
-    const data = localStorage.getItem(DEFAULT_ORIGINAL_KEY);
+    const data = getStoredValue(DEFAULT_ORIGINAL_KEY);
     if (!data) return null;
     const parsed = JSON.parse(data) as DefaultOriginalAgreement;
     return {
@@ -387,7 +400,7 @@ export function getDefaultOriginalAgreement(): DefaultOriginalAgreement | null {
 }
 
 export function clearDefaultOriginalAgreement(): void {
-  localStorage.removeItem(DEFAULT_ORIGINAL_KEY);
+  removeStoredValue(DEFAULT_ORIGINAL_KEY);
   syncValueToBackend(DEFAULT_ORIGINAL_KEY, null);
 }
 
@@ -412,7 +425,7 @@ export async function hydrateFromBackend(): Promise<void> {
 
     Object.entries(data).forEach(([key, value]) => {
       if (typeof value === 'string') {
-        localStorage.setItem(key, value);
+        setStoredValue(key, value);
       }
     });
   } catch {
@@ -421,7 +434,7 @@ export async function hydrateFromBackend(): Promise<void> {
 }
 
 function syncKeyToBackend(key: string): void {
-  const value = localStorage.getItem(key);
+  const value = getStoredValue(key);
   syncValueToBackend(key, value);
 }
 
@@ -443,3 +456,4 @@ function syncValueToBackend(key: string, value: string | null): void {
 export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
+
