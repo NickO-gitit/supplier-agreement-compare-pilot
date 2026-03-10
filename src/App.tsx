@@ -7,6 +7,7 @@ import {
   Loader2,
   Settings,
   Shield,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
@@ -41,6 +42,7 @@ import { analyzeAllRisks, analyzeRiskExpanded, askRiskFollowUp, isConfigured } f
 import {
   clearDefaultOriginalAgreement,
   createCustomer,
+  deleteComparison,
   deriveInitials,
   generateId,
   hydrateFromBackend,
@@ -1548,6 +1550,25 @@ function App() {
     setDefaultOriginal(null);
   }, []);
 
+  const handleDeleteComparisonFromSettings = useCallback(
+    (comparisonId: string) => {
+      const target = comparisons.find((entry) => entry.id === comparisonId);
+      const label = target?.title || target?.proposedDocument?.name || comparisonId;
+      const confirmed = window.confirm(
+        `Delete comparison "${label}"?\n\nThis will also remove saved responses and notes. This action cannot be undone.`
+      );
+      if (!confirmed) return;
+
+      deleteComparison(comparisonId);
+      refreshComparisons();
+
+      if (route.type === 'review' && route.comparisonId === comparisonId) {
+        navigate({ type: 'settings' }, true);
+      }
+    },
+    [comparisons, navigate, refreshComparisons, route]
+  );
+
   const renderUploadPage = () => {
     const canCompare = !!(originalDocument && proposedDocument && uploadCustomerId && !isComparing);
 
@@ -2246,46 +2267,91 @@ function App() {
     );
   };
 
-  const renderSettingsPage = () => (
-    <div className="px-8 py-6 bg-gray-50 h-full overflow-auto">
-      <div className="max-w-3xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
-          <p className="text-sm text-gray-500">Manage default original agreement and diagnostics export.</p>
-        </div>
+  const renderSettingsPage = () => {
+    const settingsComparisons = comparisons
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-800">Default Original Agreement</h2>
+    return (
+      <div className="px-8 py-6 bg-gray-50 h-full overflow-auto">
+        <div className="max-w-3xl mx-auto space-y-6">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
+            <p className="text-sm text-gray-500">Manage default original agreement, comparisons, and diagnostics export.</p>
           </div>
-          <div className="px-6 py-4 space-y-4">
-            {defaultOriginal ? (
-              <div className="border border-gray-200 rounded p-3 bg-gray-50">
-                <p className="text-sm font-medium text-gray-800">{defaultOriginal.name}</p>
-                <p className="text-xs text-gray-500 mt-1">{bytesToLabel(defaultOriginal.sizeBytes)} • Uploaded {new Date(defaultOriginal.uploadedAt).toLocaleString()}</p>
-              </div>
-            ) : (
-              <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded p-3">No default original agreement configured.</div>
-            )}
 
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="h-9 px-3 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 cursor-pointer inline-flex items-center">
-                Upload new default
-                <input type="file" className="hidden" accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadDefaultOriginal(file); }} />
-              </label>
-              <button onClick={removeDefaultOriginal} className="h-9 px-3 border border-gray-200 text-gray-600 text-sm font-medium rounded hover:bg-gray-50">Remove default</button>
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-800">Default Original Agreement</h2>
             </div>
-            {uploadingDefault && <p className="text-sm text-gray-500">Uploading default file...</p>}
-            {defaultUploadError && <p className="text-sm text-red-600">{defaultUploadError}</p>}
-          </div>
-        </div>
+            <div className="px-6 py-4 space-y-4">
+              {defaultOriginal ? (
+                <div className="border border-gray-200 rounded p-3 bg-gray-50">
+                  <p className="text-sm font-medium text-gray-800">{defaultOriginal.name}</p>
+                  <p className="text-xs text-gray-500 mt-1">{bytesToLabel(defaultOriginal.sizeBytes)} • Uploaded {new Date(defaultOriginal.uploadedAt).toLocaleString()}</p>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded p-3">No default original agreement configured.</div>
+              )}
 
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <button onClick={exportVerboseLog} className="h-10 px-4 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700">Export Verbose Log</button>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="h-9 px-3 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 cursor-pointer inline-flex items-center">
+                  Upload new default
+                  <input type="file" className="hidden" accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadDefaultOriginal(file); }} />
+                </label>
+                <button onClick={removeDefaultOriginal} className="h-9 px-3 border border-gray-200 text-gray-600 text-sm font-medium rounded hover:bg-gray-50">Remove default</button>
+              </div>
+              {uploadingDefault && <p className="text-sm text-gray-500">Uploading default file...</p>}
+              {defaultUploadError && <p className="text-sm text-red-600">{defaultUploadError}</p>}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-800">Manage Comparisons</h2>
+            </div>
+            <div className="px-6 py-4">
+              {settingsComparisons.length === 0 ? (
+                <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded p-3">
+                  No comparisons available.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {settingsComparisons.map((comparison) => {
+                    const customerName =
+                      customers.find((entry) => entry.id === comparison.customerId)?.name || 'Unknown customer';
+                    return (
+                      <div key={comparison.id} className="border border-gray-200 rounded p-3 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">
+                            {comparison.title || comparison.proposedDocument?.name || 'Untitled comparison'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {customerName} • {new Date(comparison.createdAt).toLocaleString()} • {comparison.differences.length} changes
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteComparisonFromSettings(comparison.id)}
+                          className="h-8 px-2 border border-red-200 text-red-700 text-xs font-medium rounded hover:bg-red-50 inline-flex items-center gap-1 shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+            <button onClick={exportVerboseLog} className="h-10 px-4 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700">Export Verbose Log</button>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const reviewSegments = currentComparison
     ? currentComparison.differences.map((difference) => ({
