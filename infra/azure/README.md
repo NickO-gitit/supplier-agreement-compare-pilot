@@ -1,7 +1,7 @@
-# Project.Infra – Super Simple Azure Deployment Guide
+# Infra/Azure – Super Simple Azure Deployment Guide
 
 This folder is your infrastructure package.
-You can copy it into an existing app repo as `Project.Infra`.
+You can copy it into an existing app repo as `Project.Infra` or `infra`.
 Then GitHub Actions can deploy and update Azure automatically.
 
 ## What happens automatically
@@ -26,7 +26,7 @@ This repository now supports Azure Container Apps directly:
 - Docker runtime: `Dockerfile`
 - App server: `server/index.mjs`
 - Active CI/CD workflow: `.github/workflows/deploy-container-apps.yml`
-- Infra template: `hexatronic/main.bicep`
+- Infra template: `infra/azure/main.bicep`
 
 Required GitHub settings:
 
@@ -163,7 +163,7 @@ ACR name is generated automatically from `ENVIRONMENT_NAME`.
 Use the bootstrap script to set up a new tenant end-to-end:
 
 ```powershell
-pwsh ./hexatronic/bootstrap-tenant.ps1 `
+pwsh ./infra/azure/bootstrap-tenant.ps1 `
   -TenantId "<tenant-id>" `
   -SubscriptionId "<subscription-id>" `
   -ResourceGroupName "<resource-group>" `

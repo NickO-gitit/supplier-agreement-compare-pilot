@@ -178,6 +178,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
         name: 'EnableServerless'
       }
     ]
+    disableLocalAuth: true
   }
 }
 
@@ -205,6 +206,19 @@ resource cosmosSqlContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       }
     }
   }
+}
+
+resource cosmosSqlDataContributorRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2023-11-15' = {
+  name: guid(cosmosAccount.id, userIdentity.id, cosmosDatabaseName, cosmosContainerName, 'sql-data-contributor')
+  parent: cosmosAccount
+  properties: {
+    principalId: userIdentity.properties.principalId
+    roleDefinitionId: '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
+    scope: '${cosmosAccount.id}/dbs/${cosmosDatabaseName}/colls/${cosmosContainerName}'
+  }
+  dependsOn: [
+    cosmosSqlContainer
+  ]
 }
 
 resource appConfigDataReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -235,7 +249,6 @@ module rolesModule 'roles.bicep' = if (deployRoles) {
   name: 'roles-deployment'
   params: {
     managedIdentityPrincipalId: userIdentity.properties.principalId
-    assignFoundryRole: !empty(foundryEndpoint) || !empty(foundryProjectEndpoint) || !empty(azureOpenAiEndpoint)
     assignAcrPull: true
     acrName: containerRegistry.name
   }
@@ -246,7 +259,6 @@ module rolesModule 'roles.bicep' = if (deployRoles) {
 var resolvedConnectionString = !empty(existingDatabaseConnectionString)
   ? existingDatabaseConnectionString
   : (deploySql ? sqlModule!.outputs.connectionString : '')
-var cosmosKey = cosmosAccount.listKeys().primaryMasterKey
 
 // ── Container Apps Module ─────────────────────────────────────
 module containerAppModule 'containerapps.bicep' = {
@@ -282,7 +294,6 @@ module containerAppModule 'containerapps.bicep' = {
     cosmosEndpoint: cosmosAccount.properties.documentEndpoint
     cosmosDatabaseName: cosmosDatabaseName
     cosmosContainerName: cosmosContainerName
-    cosmosKey: cosmosKey
   }
 }
 

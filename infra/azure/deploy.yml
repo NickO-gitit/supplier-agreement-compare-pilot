@@ -258,8 +258,8 @@ jobs:
       - name: Find infrastructure folder
         id: infra
         run: |
-          if [[ -f "./hexatronic/main.bicep" ]]; then
-            echo "infra_dir=./hexatronic" >> "$GITHUB_OUTPUT"
+          if [[ -f "./infra/azure/main.bicep" ]]; then
+            echo "infra_dir=./infra/azure" >> "$GITHUB_OUTPUT"
           elif [[ -f "./Project.Infra/main.bicep" ]]; then
             echo "infra_dir=./Project.Infra" >> "$GITHUB_OUTPUT"
           elif [[ -f "./infra/main.bicep" ]]; then
@@ -267,7 +267,7 @@ jobs:
           elif [[ -f "./main.bicep" ]]; then
             echo "infra_dir=." >> "$GITHUB_OUTPUT"
           else
-            echo "❌ main.bicep not found in ./Project.Infra, ./infra, or root"
+            echo "❌ main.bicep not found in ./infra/azure, ./Project.Infra, ./infra, or root"
             exit 1
           fi
 

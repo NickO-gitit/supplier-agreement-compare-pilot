@@ -2,7 +2,7 @@
 # ============================================================
 # deploy.sh  –  Local deployment helper
 # Reads .env, scans for existing databases, then runs Bicep.
-# Usage: ./infra/deploy.sh [--env .env]
+# Usage: ./infra/azure/deploy.sh [--env .env]
 # ============================================================
 set -euo pipefail
 

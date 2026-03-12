@@ -508,13 +508,38 @@ jobs:
           echo "foundry_api_key=$FOUNDRY_API_KEY_VALUE" >> "$GITHUB_OUTPUT"
           echo "openai_api_key=$OPENAI_API_KEY_VALUE" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve Infra Directory
+        id: infra
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          candidates=(
+            "./infra/azure"
+            "./infra"
+            "./Project.Infra"
+            "."
+          )
+
+          for candidate in "${candidates[@]}"; do
+            if [[ -f "$candidate/main.bicep" ]]; then
+              echo "infra_dir=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Using infrastructure directory: $candidate"
+              exit 0
+            fi
+          done
+
+          echo "Could not find main.bicep in supported infra directories."
+          echo "Checked: ${candidates[*]}"
+          exit 1
+
       - name: Deploy Bicep
         id: deploy
         uses: azure/arm-deploy@v2
         with:
           subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
-          template: ./hexatronic/main.bicep
+          template: ${{ steps.infra.outputs.infra_dir }}/main.bicep
           parameters: >
             location="${{ env.AZURE_LOCATION }}"
             environmentName="${{ env.ENVIRONMENT_NAME }}"

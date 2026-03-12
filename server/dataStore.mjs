@@ -1,13 +1,14 @@
 import { CosmosClient } from '@azure/cosmos';
+import { DefaultAzureCredential } from '@azure/identity';
 
 const cosmosEndpoint = normalize(process.env.COSMOS_ENDPOINT);
-const cosmosKey = normalize(process.env.COSMOS_KEY);
+const managedIdentityClientId = normalize(process.env.AZURE_CLIENT_ID);
 const cosmosDatabaseName = normalize(process.env.COSMOS_DATABASE_NAME) || 'suppliercompare';
 const cosmosContainerName = normalize(process.env.COSMOS_CONTAINER_NAME) || 'projects';
 const cosmosTenant = normalize(process.env.APP_STORAGE_TENANT) || normalize(process.env.ENVIRONMENT) || 'default';
 const cosmosLegacyDocumentId = normalize(process.env.APP_STORAGE_DOCUMENT_ID) || 'app-storage';
 
-const hasCosmosConfig = Boolean(cosmosEndpoint && cosmosKey);
+const hasCosmosConfig = Boolean(cosmosEndpoint);
 
 const PROJECTS_KEY = 'supplier-agreement-projects';
 const PROJECT_COMPARISONS_PREFIX = 'supplier-agreement-comparisons:project:';
@@ -53,12 +54,20 @@ export async function setStorageValue(key, value) {
 
 async function getCosmosContainerClient() {
   if (!hasCosmosConfig) {
-    throw new Error('Cosmos DB is required. Set COSMOS_ENDPOINT and COSMOS_KEY.');
+    throw new Error('Cosmos DB is required. Set COSMOS_ENDPOINT.');
   }
 
   if (!cosmosContainerClientPromise) {
     cosmosContainerClientPromise = Promise.resolve().then(() => {
-      const client = new CosmosClient({ endpoint: cosmosEndpoint, key: cosmosKey });
+      const credential = managedIdentityClientId
+        ? new DefaultAzureCredential({ managedIdentityClientId })
+        : new DefaultAzureCredential();
+
+      const client = new CosmosClient({
+        endpoint: cosmosEndpoint,
+        aadCredentials: credential,
+      });
+
       return client.database(cosmosDatabaseName).container(cosmosContainerName);
     });
   }

@@ -128,7 +128,7 @@ Keep deploy_sql=false unless you want SQL provisioned.
 8b) BOOTSTRAP NEW TENANT (AUTOMATED)
 Run once per tenant:
 
-pwsh ./hexatronic/bootstrap-tenant.ps1 `
+pwsh ./infra/azure/bootstrap-tenant.ps1 `
   -TenantId "<tenant-id>" `
   -SubscriptionId "<subscription-id>" `
   -ResourceGroupName "<rg-name>" `

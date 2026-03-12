@@ -35,8 +35,6 @@ param environmentName string
 param cosmosEndpoint string
 param cosmosDatabaseName string
 param cosmosContainerName string
-@secure()
-param cosmosKey string
 
 // ── Log Analytics Workspace ───────────────────────────────────
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
@@ -107,10 +105,6 @@ var storageEnvVars = [
   {
     name: 'COSMOS_CONTAINER_NAME'
     value: cosmosContainerName
-  }
-  {
-    name: 'COSMOS_KEY'
-    secretRef: 'cosmos-key'
   }
 ]
 
@@ -229,12 +223,6 @@ var managedIdentityRegistry = !empty(containerRegistryServer) ? [
 
 var registries = managedIdentityRegistry
 var appSecrets = concat(
-  [
-    {
-      name: 'cosmos-key'
-      value: cosmosKey
-    }
-  ],
   !empty(foundryApiKey) ? [
     {
       name: 'foundry-api-key'
