@@ -125,7 +125,7 @@ var acrName = length(acrNameBase) < 5 ? 'acr${take(uniqueString(resourceGroup().
 var cosmosBase = replace(toLower('${prefix}cosmos'), '-', '')
 var cosmosAccountName = take('${cosmosBase}${take(uniqueString(resourceGroup().id), 8)}', 44)
 var cosmosDatabaseName = 'suppliercompare'
-var cosmosContainerName = 'appstate'
+var cosmosContainerName = 'projects'
 
 // ── Azure Container Registry ────────────────────────────────
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -199,7 +199,7 @@ resource cosmosSqlContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       id: cosmosContainerName
       partitionKey: {
         paths: [
-          '/tenant'
+          '/projectId'
         ]
         kind: 'Hash'
       }
