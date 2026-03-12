@@ -126,10 +126,6 @@ var cosmosBase = replace(toLower('${prefix}cosmos'), '-', '')
 var cosmosAccountName = take('${cosmosBase}${take(uniqueString(resourceGroup().id), 8)}', 44)
 var cosmosDatabaseName = 'suppliercompare'
 var cosmosContainerName = 'appstate'
-var appStorageBase = replace(toLower('${prefix}st'), '-', '')
-var appStorageAccountName = take('${appStorageBase}${take(uniqueString(resourceGroup().id), 8)}', 24)
-var appStorageBlobContainerName = 'appstate'
-var appStorageBlobName = 'app-storage.json'
 
 // ── Azure Container Registry ────────────────────────────────
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -211,28 +207,6 @@ resource cosmosSqlContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
-// ── Blob Storage for snapshot backup ─────────────────────────
-resource appStorageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  name: appStorageAccountName
-  location: location
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    allowBlobPublicAccess: false
-    minimumTlsVersion: 'TLS1_2'
-    supportsHttpsTrafficOnly: true
-  }
-}
-
-resource appStorageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  name: '${appStorageAccount.name}/default/${appStorageBlobContainerName}'
-  properties: {
-    publicAccess: 'None'
-  }
-}
-
 resource appConfigDataReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(appConfiguration.id, userIdentity.id, 'app-configuration-data-reader')
   scope: appConfiguration
@@ -273,7 +247,6 @@ var resolvedConnectionString = !empty(existingDatabaseConnectionString)
   ? existingDatabaseConnectionString
   : (deploySql ? sqlModule!.outputs.connectionString : '')
 var cosmosKey = cosmosAccount.listKeys().primaryMasterKey
-var appStorageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${appStorageAccount.name};AccountKey=${appStorageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
 // ── Container Apps Module ─────────────────────────────────────
 module containerAppModule 'containerapps.bicep' = {
@@ -310,9 +283,6 @@ module containerAppModule 'containerapps.bicep' = {
     cosmosDatabaseName: cosmosDatabaseName
     cosmosContainerName: cosmosContainerName
     cosmosKey: cosmosKey
-    appStorageBlobConnectionString: appStorageConnectionString
-    appStorageBlobContainerName: appStorageBlobContainerName
-    appStorageBlobName: appStorageBlobName
   }
 }
 

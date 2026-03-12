@@ -37,10 +37,6 @@ param cosmosDatabaseName string
 param cosmosContainerName string
 @secure()
 param cosmosKey string
-@secure()
-param appStorageBlobConnectionString string
-param appStorageBlobContainerName string = 'appstate'
-param appStorageBlobName string = 'app-storage.json'
 
 // ── Log Analytics Workspace ───────────────────────────────────
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
@@ -115,18 +111,6 @@ var storageEnvVars = [
   {
     name: 'COSMOS_KEY'
     secretRef: 'cosmos-key'
-  }
-  {
-    name: 'APP_STORAGE_BLOB_CONNECTION_STRING'
-    secretRef: 'app-storage-blob-connection-string'
-  }
-  {
-    name: 'APP_STORAGE_BLOB_CONTAINER'
-    value: appStorageBlobContainerName
-  }
-  {
-    name: 'APP_STORAGE_BLOB_NAME'
-    value: appStorageBlobName
   }
 ]
 
@@ -249,10 +233,6 @@ var appSecrets = concat(
     {
       name: 'cosmos-key'
       value: cosmosKey
-    }
-    {
-      name: 'app-storage-blob-connection-string'
-      value: appStorageBlobConnectionString
     }
   ],
   !empty(foundryApiKey) ? [
