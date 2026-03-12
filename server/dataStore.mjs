@@ -30,7 +30,11 @@ function withLock(task) {
 }
 
 export async function getStorageSnapshot() {
-  return withLock(async () => readStore());
+  return withLock(async () => {
+    const container = await getCosmosContainerClient();
+    const state = await loadState(container);
+    return buildSnapshotFromState(state);
+  });
 }
 
 export async function setStorageValue(key, value) {
@@ -41,23 +45,10 @@ export async function setStorageValue(key, value) {
   return withLock(async () => {
     const container = await getCosmosContainerClient();
     const state = await loadState(container);
+
     applyMutation(state, key, value);
     await persistState(container, state);
   });
-}
-
-async function readStore() {
-  const container = await getCosmosContainerClient();
-  const state = await loadState(container);
-
-  if (state.projectsById.size === 0 && Object.keys(state.configValues).length === 0) {
-    const legacy = await readLegacySnapshot(container);
-    if (legacy) {
-      return legacy;
-    }
-  }
-
-  return buildSnapshotFromState(state);
 }
 
 async function getCosmosContainerClient() {
@@ -67,15 +58,113 @@ async function getCosmosContainerClient() {
 
   if (!cosmosContainerClientPromise) {
     cosmosContainerClientPromise = Promise.resolve().then(() => {
-      const client = new CosmosClient({
-        endpoint: cosmosEndpoint,
-        key: cosmosKey,
-      });
+      const client = new CosmosClient({ endpoint: cosmosEndpoint, key: cosmosKey });
       return client.database(cosmosDatabaseName).container(cosmosContainerName);
     });
   }
 
   return cosmosContainerClientPromise;
+}
+
+function createEmptyState() {
+  return {
+    projectsById: new Map(),
+    runsByProject: new Map(),
+    configValues: {},
+
+    existingProjectDocs: new Map(),
+    existingRunDocs: new Map(),
+    legacyConfigDocs: [],
+
+    hadLegacySnapshot: false,
+    changed: false,
+  };
+}
+
+async function loadState(container) {
+  const state = createEmptyState();
+  const typedDocs = await queryTypedDocuments(container);
+
+  typedDocs.forEach((doc) => {
+    const type = String(doc?.type || '').trim();
+
+    if (type === PROJECT_DOC_TYPE) {
+      const projectId = String(doc?.projectId || doc?.project || '').trim();
+      if (!projectId || projectId === SYSTEM_PROJECT_ID) {
+        return;
+      }
+
+      state.existingProjectDocs.set(projectId, doc);
+      state.projectsById.set(projectId, normalizeProject(doc, projectId));
+
+      // Migration support from previously embedded model.
+      if (doc.runTable && typeof doc.runTable === 'object' && !Array.isArray(doc.runTable)) {
+        const runs = state.runsByProject.get(projectId) || new Map();
+        Object.entries(doc.runTable).forEach(([runId, runValue]) => {
+          const normalizedRunId = String(runId || '').trim();
+          if (!normalizedRunId) return;
+          if (!runs.has(normalizedRunId)) {
+            runs.set(normalizedRunId, normalizeRunRecord(runValue, projectId, normalizedRunId));
+          }
+        });
+        state.runsByProject.set(projectId, runs);
+      }
+
+      return;
+    }
+
+    if (type === RUN_DOC_TYPE) {
+      const projectId = String(doc?.projectId || doc?.project || '').trim();
+      const runId = String(doc?.runId || doc?.comparison?.id || '').trim();
+      if (!projectId || !runId || projectId === SYSTEM_PROJECT_ID) {
+        return;
+      }
+
+      state.existingRunDocs.set(buildRunDocumentId(projectId, runId), doc);
+
+      const runs = state.runsByProject.get(projectId) || new Map();
+      runs.set(runId, normalizeRunRecord(doc, projectId, runId));
+      state.runsByProject.set(projectId, runs);
+
+      if (!state.projectsById.has(projectId)) {
+        state.projectsById.set(projectId, {
+          id: projectId,
+          name: projectId,
+          color: 'blue',
+          initials: deriveInitials(projectId),
+          createdAt: doc?.createdAt || new Date().toISOString(),
+        });
+      }
+
+      return;
+    }
+
+    if (type === CONFIG_DOC_TYPE) {
+      if (doc.id === buildConfigDocumentId()) {
+        if (doc.values && typeof doc.values === 'object' && !Array.isArray(doc.values)) {
+          Object.entries(doc.values).forEach(([k, v]) => {
+            state.configValues[k] = String(v);
+          });
+        }
+      } else if (typeof doc.key === 'string' && typeof doc.value === 'string') {
+        state.configValues[doc.key] = doc.value;
+        state.legacyConfigDocs.push(doc);
+      } else {
+        state.legacyConfigDocs.push(doc);
+      }
+    }
+  });
+
+  if (typedDocs.length === 0) {
+    const legacySnapshot = await readLegacySnapshot(container);
+    if (legacySnapshot) {
+      state.hadLegacySnapshot = true;
+      applySnapshotToState(state, legacySnapshot);
+      state.changed = true;
+    }
+  }
+
+  return state;
 }
 
 async function queryTypedDocuments(container) {
@@ -116,143 +205,40 @@ async function readLegacySnapshot(container) {
   }
 }
 
-function createEmptyState() {
-  return {
-    projectsById: new Map(),
-    configValues: {},
-    removedProjectIds: new Set(),
-    modifiedProjectIds: new Set(),
-    configTouched: false,
-    canonicalConfigDocPresent: false,
-    legacyRunDocs: [],
-    legacyConfigDocs: [],
-  };
-}
+function applySnapshotToState(state, snapshot) {
+  const keys = Object.keys(snapshot || {});
 
-async function loadState(container) {
-  const docs = await queryTypedDocuments(container);
-  const state = createEmptyState();
+  keys
+    .filter((key) => key === PROJECTS_KEY || key === LEGACY_CUSTOMERS_KEY)
+    .forEach((key) => applyMutation(state, key, snapshot[key]));
 
-  docs.forEach((doc) => {
-    const type = String(doc?.type || '').trim();
+  keys
+    .filter(
+      (key) =>
+        key.startsWith(PROJECT_COMPARISONS_PREFIX) ||
+        key === LEGACY_COMPARISONS_KEY
+    )
+    .forEach((key) => applyMutation(state, key, snapshot[key]));
 
-    if (type === PROJECT_DOC_TYPE) {
-      const projectId = String(doc?.projectId || '').trim();
-      if (!projectId || projectId === SYSTEM_PROJECT_ID) {
-        return;
-      }
+  keys
+    .filter((key) => key.startsWith(PROJECT_NOTES_PREFIX))
+    .forEach((key) => applyMutation(state, key, snapshot[key]));
 
-      const projectTable = normalizeProjectTable(doc.projectTable, doc, projectId);
-      const runTable = normalizeRunTable(doc.runTable, projectId);
+  keys
+    .filter((key) => key.startsWith(PROJECT_CHANGE_RESPONSES_PREFIX))
+    .forEach((key) => applyMutation(state, key, snapshot[key]));
 
-      state.projectsById.set(projectId, {
-        projectId,
-        doc,
-        projectTable,
-        runTable,
-      });
-      return;
-    }
-
-    if (type === RUN_DOC_TYPE) {
-      state.legacyRunDocs.push(doc);
-      return;
-    }
-
-    if (type === CONFIG_DOC_TYPE) {
-      if (doc.id === buildConfigDocumentId()) {
-        state.canonicalConfigDocPresent = true;
-        if (doc.values && typeof doc.values === 'object' && !Array.isArray(doc.values)) {
-          Object.entries(doc.values).forEach(([key, value]) => {
-            state.configValues[key] = String(value);
-          });
-        }
-      } else if (typeof doc.key === 'string' && typeof doc.value === 'string') {
-        state.configValues[doc.key] = doc.value;
-        state.legacyConfigDocs.push(doc);
-      } else {
-        state.legacyConfigDocs.push(doc);
-      }
-    }
-  });
-
-  // Migrate prior structure: one run document per comparison -> embed under project.runTable
-  state.legacyRunDocs.forEach((runDoc) => {
-    const projectId = String(runDoc?.projectId || '').trim();
-    if (!projectId || projectId === SYSTEM_PROJECT_ID) {
-      return;
-    }
-
-    const projectState = ensureProjectState(state, projectId, projectId);
-    const runId = String(runDoc?.runId || runDoc?.comparison?.id || '').trim();
-    if (!runId) {
-      return;
-    }
-
-    if (!Object.prototype.hasOwnProperty.call(projectState.runTable, runId)) {
-      projectState.runTable[runId] = normalizeRunRecord(runDoc, projectId, runId);
-      state.modifiedProjectIds.add(projectId);
-    }
-  });
-
-  if (state.legacyRunDocs.length > 0 || state.legacyConfigDocs.length > 0) {
-    state.configTouched = true;
-  }
-
-  return state;
-}
-
-function buildSnapshotFromState(state) {
-  const snapshot = {};
-
-  const projects = Array.from(state.projectsById.values())
-    .map((entry) => entry.projectTable)
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-
-  if (projects.length > 0) {
-    snapshot[PROJECTS_KEY] = JSON.stringify(projects);
-  }
-
-  state.projectsById.forEach((entry, projectId) => {
-    const runList = Object.values(entry.runTable)
-      .map((run) => normalizeComparison(run.comparison, projectId, run.runId))
-      .filter((comparison) => comparison.id)
-      .sort(
-        (a, b) =>
-          new Date(String(b.createdAt || 0)).getTime() -
-          new Date(String(a.createdAt || 0)).getTime()
-      );
-
-    if (runList.length > 0) {
-      snapshot[`${PROJECT_COMPARISONS_PREFIX}${projectId}`] = JSON.stringify(runList);
-    }
-
-    const notesByComparison = {};
-    const responsesByComparison = {};
-
-    Object.entries(entry.runTable).forEach(([runId, run]) => {
-      if (Array.isArray(run.notes) && run.notes.length > 0) {
-        notesByComparison[runId] = run.notes;
-      }
-      if (Array.isArray(run.changeResponses) && run.changeResponses.length > 0) {
-        responsesByComparison[runId] = run.changeResponses;
-      }
-    });
-
-    if (Object.keys(notesByComparison).length > 0) {
-      snapshot[`${PROJECT_NOTES_PREFIX}${projectId}`] = JSON.stringify(notesByComparison);
-    }
-
-    if (Object.keys(responsesByComparison).length > 0) {
-      snapshot[`${PROJECT_CHANGE_RESPONSES_PREFIX}${projectId}`] = JSON.stringify(responsesByComparison);
-    }
-  });
-
-  Object.entries(state.configValues).forEach(([key, value]) => {
-    snapshot[key] = String(value);
-  });
-
-  return snapshot;
+  keys
+    .filter(
+      (key) =>
+        key !== PROJECTS_KEY &&
+        key !== LEGACY_CUSTOMERS_KEY &&
+        !key.startsWith(PROJECT_COMPARISONS_PREFIX) &&
+        key !== LEGACY_COMPARISONS_KEY &&
+        !key.startsWith(PROJECT_NOTES_PREFIX) &&
+        !key.startsWith(PROJECT_CHANGE_RESPONSES_PREFIX)
+    )
+    .forEach((key) => applyMutation(state, key, snapshot[key]));
 }
 
 function applyMutation(state, key, value) {
@@ -289,57 +275,67 @@ function applyMutation(state, key, value) {
 
 function applyProjectsKey(state, value) {
   const projects = parseProjectsValue(value);
-  const incomingIds = new Set(projects.map((entry) => entry.id));
+  const desiredIds = new Set(projects.map((p) => p.id));
 
   projects.forEach((project) => {
-    const projectState = ensureProjectState(state, project.id, project.name);
+    const current = state.projectsById.get(project.id);
+    state.projectsById.set(project.id, {
+      ...current,
+      ...project,
+      createdAt: project.createdAt || current?.createdAt || new Date().toISOString(),
+    });
 
-    projectState.projectTable = {
-      id: project.id,
-      name: project.name,
-      color: project.color,
-      initials: project.initials,
-      createdAt: project.createdAt || projectState.projectTable.createdAt || new Date().toISOString(),
-    };
-
-    state.modifiedProjectIds.add(project.id);
+    if (!state.runsByProject.has(project.id)) {
+      state.runsByProject.set(project.id, new Map());
+    }
   });
 
   Array.from(state.projectsById.keys()).forEach((projectId) => {
-    if (!incomingIds.has(projectId)) {
+    if (!desiredIds.has(projectId)) {
       state.projectsById.delete(projectId);
-      state.removedProjectIds.add(projectId);
-      state.modifiedProjectIds.delete(projectId);
+      state.runsByProject.delete(projectId);
     }
   });
+
+  state.changed = true;
 }
 
 function applyProjectComparisonsKey(state, projectId, value) {
   if (!projectId) return;
 
   const comparisons = parseComparisonsValue(value, projectId);
-  const projectState = ensureProjectState(state, projectId, projectId);
+  const existingRuns = state.runsByProject.get(projectId) || new Map();
+  const nextRuns = new Map();
   const now = new Date().toISOString();
-
-  const nextRunTable = {};
 
   comparisons.forEach((comparison) => {
     const runId = comparison.id;
     if (!runId) return;
 
-    const existing = projectState.runTable[runId];
-    nextRunTable[runId] = {
+    const existing = existingRuns.get(runId);
+    nextRuns.set(runId, {
       runId,
       createdAt: existing?.createdAt || comparison.createdAt || now,
       updatedAt: now,
       comparison: normalizeComparison(comparison, projectId, runId),
       notes: Array.isArray(existing?.notes) ? existing.notes : [],
       changeResponses: Array.isArray(existing?.changeResponses) ? existing.changeResponses : [],
-    };
+    });
   });
 
-  projectState.runTable = nextRunTable;
-  state.modifiedProjectIds.add(projectId);
+  state.runsByProject.set(projectId, nextRuns);
+
+  if (!state.projectsById.has(projectId)) {
+    state.projectsById.set(projectId, {
+      id: projectId,
+      name: projectId,
+      color: 'blue',
+      initials: deriveInitials(projectId),
+      createdAt: now,
+    });
+  }
+
+  state.changed = true;
 }
 
 function applyLegacyComparisonsKey(state, value) {
@@ -349,16 +345,13 @@ function applyLegacyComparisonsKey(state, value) {
   }
 
   const grouped = new Map();
-
   parsed.forEach((entry) => {
-    const normalized = normalizeComparison(entry, '', '');
-    if (!normalized.projectId || !normalized.id) {
-      return;
-    }
+    const comparison = normalizeComparison(entry, '', '');
+    if (!comparison.projectId || !comparison.id) return;
 
-    const list = grouped.get(normalized.projectId) || [];
-    list.push(normalized);
-    grouped.set(normalized.projectId, list);
+    const list = grouped.get(comparison.projectId) || [];
+    list.push(comparison);
+    grouped.set(comparison.projectId, list);
   });
 
   grouped.forEach((comparisons, projectId) => {
@@ -370,35 +363,34 @@ function applyProjectNotesKey(state, projectId, value) {
   if (!projectId) return;
 
   const notesByComparison = parseJsonObject(value);
-  const projectState = ensureProjectState(state, projectId, projectId);
+  const runs = state.runsByProject.get(projectId) || new Map();
   const now = new Date().toISOString();
 
-  Object.entries(projectState.runTable).forEach(([runId, run]) => {
-    const notes = Array.isArray(notesByComparison?.[runId]) ? notesByComparison[runId] : [];
-    run.notes = notes;
+  runs.forEach((run, runId) => {
+    run.notes = Array.isArray(notesByComparison?.[runId]) ? notesByComparison[runId] : [];
     run.updatedAt = now;
   });
 
-  state.modifiedProjectIds.add(projectId);
+  state.runsByProject.set(projectId, runs);
+  state.changed = true;
 }
 
 function applyProjectChangeResponsesKey(state, projectId, value) {
   if (!projectId) return;
 
   const responsesByComparison = parseJsonObject(value);
-  const projectState = ensureProjectState(state, projectId, projectId);
+  const runs = state.runsByProject.get(projectId) || new Map();
   const now = new Date().toISOString();
 
-  Object.entries(projectState.runTable).forEach(([runId, run]) => {
-    const responses = Array.isArray(responsesByComparison?.[runId])
+  runs.forEach((run, runId) => {
+    run.changeResponses = Array.isArray(responsesByComparison?.[runId])
       ? responsesByComparison[runId]
       : [];
-
-    run.changeResponses = responses;
     run.updatedAt = now;
   });
 
-  state.modifiedProjectIds.add(projectId);
+  state.runsByProject.set(projectId, runs);
+  state.changed = true;
 }
 
 function applyConfigKey(state, key, value) {
@@ -408,38 +400,74 @@ function applyConfigKey(state, key, value) {
     state.configValues[key] = String(value);
   }
 
-  state.configTouched = true;
+  state.changed = true;
 }
 
 async function persistState(container, state) {
+  if (!state.changed) {
+    return;
+  }
+
   const now = new Date().toISOString();
 
-  // Upsert modified project documents.
-  for (const projectId of state.modifiedProjectIds) {
-    const projectState = state.projectsById.get(projectId);
-    if (!projectState) continue;
+  // Upsert project documents.
+  for (const [projectId, project] of state.projectsById.entries()) {
+    const existing = state.existingProjectDocs.get(projectId);
 
-    const doc = {
-      id: buildProjectDocumentId(projectId),
-      type: PROJECT_DOC_TYPE,
-      tenant: cosmosTenant,
-      projectId,
-      projectTable: projectState.projectTable,
-      runTable: projectState.runTable,
-      runCount: Object.keys(projectState.runTable).length,
-      createdAt: projectState.doc?.createdAt || projectState.projectTable.createdAt || now,
-      updatedAt: now,
-    };
-
-    await container.items.upsert(doc);
+      await container.items.upsert({
+        id: buildProjectDocumentId(projectId),
+        type: PROJECT_DOC_TYPE,
+        tenant: cosmosTenant,
+        projectId,
+        project: projectId,
+        name: project.name,
+        color: project.color,
+        initials: project.initials,
+        createdAt: existing?.createdAt || project.createdAt || now,
+        updatedAt: now,
+      });
   }
 
-  // Delete removed project documents.
-  for (const projectId of state.removedProjectIds) {
-    await deleteById(container, buildProjectDocumentId(projectId), [projectId, cosmosTenant]);
+  // Delete project documents removed from state.
+  for (const [projectId] of state.existingProjectDocs.entries()) {
+    if (!state.projectsById.has(projectId)) {
+      await deleteById(container, buildProjectDocumentId(projectId), [projectId, cosmosTenant]);
+    }
   }
 
-  // Persist config values in one canonical system document.
+  // Upsert run documents.
+  const desiredRunDocIds = new Set();
+
+  for (const [projectId, runs] of state.runsByProject.entries()) {
+    for (const [runId, run] of runs.entries()) {
+      const docId = buildRunDocumentId(projectId, runId);
+      desiredRunDocIds.add(docId);
+      const existing = state.existingRunDocs.get(docId);
+
+      await container.items.upsert({
+        id: docId,
+        type: RUN_DOC_TYPE,
+        tenant: cosmosTenant,
+        projectId,
+        project: projectId,
+        runId,
+        comparison: normalizeComparison(run.comparison, projectId, runId),
+        notes: Array.isArray(run.notes) ? run.notes : [],
+        changeResponses: Array.isArray(run.changeResponses) ? run.changeResponses : [],
+        createdAt: existing?.createdAt || run.createdAt || now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  // Delete run documents removed from state.
+  for (const [docId, doc] of state.existingRunDocs.entries()) {
+    if (!desiredRunDocIds.has(docId)) {
+      await deleteDocument(container, doc);
+    }
+  }
+
+  // Persist config values as one canonical config doc.
   const configDocId = buildConfigDocumentId();
   if (Object.keys(state.configValues).length > 0) {
     await container.items.upsert({
@@ -447,115 +475,135 @@ async function persistState(container, state) {
       type: CONFIG_DOC_TYPE,
       tenant: cosmosTenant,
       projectId: SYSTEM_PROJECT_ID,
+      project: SYSTEM_PROJECT_ID,
       values: state.configValues,
       updatedAt: now,
     });
-  } else if (state.configTouched || state.canonicalConfigDocPresent) {
+  } else {
     await deleteById(container, configDocId, [SYSTEM_PROJECT_ID, cosmosTenant]);
   }
 
-  // Cleanup legacy run/config records from prior schema versions.
-  for (const runDoc of state.legacyRunDocs) {
-    await deleteDocument(container, runDoc);
+  // Remove legacy config docs (key/value style).
+  for (const legacyConfigDoc of state.legacyConfigDocs) {
+    await deleteDocument(container, legacyConfigDoc);
   }
 
-  for (const configDoc of state.legacyConfigDocs) {
-    await deleteDocument(container, configDoc);
-  }
-
-  // Cleanup legacy single snapshot doc after successful migration.
-  if (state.modifiedProjectIds.size > 0 || state.legacyRunDocs.length > 0 || state.configTouched) {
+  // Remove old single-snapshot document after migration/write.
+  if (state.hadLegacySnapshot) {
     await deleteById(container, cosmosLegacyDocumentId, [cosmosTenant, SYSTEM_PROJECT_ID]);
   }
 }
 
-function ensureProjectState(state, projectId, fallbackName) {
-  const existing = state.projectsById.get(projectId);
-  if (existing) {
-    return existing;
+function buildSnapshotFromState(state) {
+  const snapshot = {};
+
+  const projectIds = new Set([...state.projectsById.keys(), ...state.runsByProject.keys()]);
+
+  const projects = Array.from(projectIds)
+    .map((projectId) => {
+      const project = state.projectsById.get(projectId);
+      if (project) return project;
+
+      return {
+        id: projectId,
+        name: projectId,
+        color: 'blue',
+        initials: deriveInitials(projectId),
+        createdAt: new Date().toISOString(),
+      };
+    })
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  if (projects.length > 0) {
+    snapshot[PROJECTS_KEY] = JSON.stringify(projects);
   }
 
-  const now = new Date().toISOString();
-  const created = {
-    projectId,
-    doc: null,
-    projectTable: {
-      id: projectId,
-      name: fallbackName || projectId,
-      color: 'blue',
-      initials: deriveInitials(fallbackName || projectId),
-      createdAt: now,
-    },
-    runTable: {},
-  };
+  for (const projectId of projectIds) {
+    const runs = state.runsByProject.get(projectId) || new Map();
 
-  state.projectsById.set(projectId, created);
-  state.modifiedProjectIds.add(projectId);
-  return created;
-}
+    const comparisons = Array.from(runs.values())
+      .map((run) => normalizeComparison(run.comparison, projectId, run.runId))
+      .filter((comparison) => comparison.id)
+      .sort(
+        (a, b) =>
+          new Date(String(b.createdAt || 0)).getTime() -
+          new Date(String(a.createdAt || 0)).getTime()
+      );
 
-function normalizeProjectTable(value, doc, projectId) {
-  const now = new Date().toISOString();
+    if (comparisons.length > 0) {
+      snapshot[`${PROJECT_COMPARISONS_PREFIX}${projectId}`] = JSON.stringify(comparisons);
+    }
 
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return {
-      id: String(value.id || projectId),
-      name: String(value.name || doc?.name || projectId),
-      color: String(value.color || doc?.color || 'blue'),
-      initials: String(value.initials || doc?.initials || deriveInitials(String(value.name || doc?.name || projectId))),
-      createdAt: value.createdAt || doc?.createdAt || now,
-    };
+    const notesByComparison = {};
+    const responsesByComparison = {};
+
+    runs.forEach((run, runId) => {
+      if (Array.isArray(run.notes) && run.notes.length > 0) {
+        notesByComparison[runId] = run.notes;
+      }
+      if (Array.isArray(run.changeResponses) && run.changeResponses.length > 0) {
+        responsesByComparison[runId] = run.changeResponses;
+      }
+    });
+
+    if (Object.keys(notesByComparison).length > 0) {
+      snapshot[`${PROJECT_NOTES_PREFIX}${projectId}`] = JSON.stringify(notesByComparison);
+    }
+
+    if (Object.keys(responsesByComparison).length > 0) {
+      snapshot[`${PROJECT_CHANGE_RESPONSES_PREFIX}${projectId}`] = JSON.stringify(responsesByComparison);
+    }
   }
 
-  return {
-    id: projectId,
-    name: String(doc?.name || projectId),
-    color: String(doc?.color || 'blue'),
-    initials: String(doc?.initials || deriveInitials(String(doc?.name || projectId))),
-    createdAt: doc?.createdAt || now,
-  };
-}
-
-function normalizeRunTable(runTableValue, projectId) {
-  const runTable = {};
-
-  if (!runTableValue || typeof runTableValue !== 'object' || Array.isArray(runTableValue)) {
-    return runTable;
-  }
-
-  Object.entries(runTableValue).forEach(([runId, entry]) => {
-    const normalizedRunId = String(runId || '').trim();
-    if (!normalizedRunId) return;
-
-    runTable[normalizedRunId] = normalizeRunRecord(entry, projectId, normalizedRunId);
+  Object.entries(state.configValues).forEach(([key, value]) => {
+    snapshot[key] = String(value);
   });
 
-  return runTable;
+  return snapshot;
+}
+
+function normalizeProject(doc, projectId) {
+  const source =
+    doc?.projectTable && typeof doc.projectTable === 'object' && !Array.isArray(doc.projectTable)
+      ? doc.projectTable
+      : doc;
+
+  const name = String(source?.name || doc?.name || projectId);
+
+  return {
+    id: String(source?.id || projectId),
+    name,
+    color: String(source?.color || doc?.color || 'blue'),
+    initials: String(source?.initials || doc?.initials || deriveInitials(name)),
+    createdAt: source?.createdAt || doc?.createdAt || new Date().toISOString(),
+  };
 }
 
 function normalizeRunRecord(value, projectId, runId) {
-  const record = sanitizeObject(value);
+  const source = sanitizeObject(value);
   const now = new Date().toISOString();
 
-  const comparisonSource = record.comparison || record;
+  const comparisonSource = source.comparison || source;
   const comparison = normalizeComparison(comparisonSource, projectId, runId);
 
   return {
     runId,
-    createdAt: record.createdAt || comparison.createdAt || now,
-    updatedAt: record.updatedAt || now,
+    createdAt: source.createdAt || comparison.createdAt || now,
+    updatedAt: source.updatedAt || now,
     comparison,
-    notes: Array.isArray(record.notes) ? record.notes : [],
-    changeResponses: Array.isArray(record.changeResponses) ? record.changeResponses : [],
+    notes: Array.isArray(source.notes) ? source.notes : [],
+    changeResponses: Array.isArray(source.changeResponses) ? source.changeResponses : [],
   };
 }
 
 function normalizeComparison(value, defaultProjectId, defaultId) {
   const source = sanitizeObject(value);
+
   const id =
     (typeof source.id === 'string' && source.id.trim()) ||
     (typeof defaultId === 'string' && defaultId.trim()) ||
     '';
+
   const projectId =
     (typeof source.projectId === 'string' && source.projectId.trim()) ||
     (typeof source.customerId === 'string' && source.customerId.trim()) ||
@@ -619,14 +667,19 @@ function buildProjectDocumentId(projectId) {
   return `project:${projectId}`;
 }
 
+function buildRunDocumentId(projectId, runId) {
+  return `run:${projectId}:${runId}`;
+}
+
 function buildConfigDocumentId() {
   return `config:${cosmosTenant}`;
 }
 
 async function deleteById(container, id, partitionKeyCandidates) {
-  let lastError = null;
+  const candidates = Array.from(new Set(partitionKeyCandidates.filter(Boolean)));
 
-  for (const partitionKey of partitionKeyCandidates) {
+  let lastError = null;
+  for (const partitionKey of candidates) {
     try {
       await container.item(id, partitionKey).delete();
       return;
@@ -645,10 +698,13 @@ async function deleteById(container, id, partitionKeyCandidates) {
 }
 
 async function deleteDocument(container, doc) {
-  const candidates = Array.from(
-    new Set([doc?.projectId, doc?.tenant, SYSTEM_PROJECT_ID, cosmosTenant].filter(Boolean))
-  );
-  await deleteById(container, doc.id, candidates);
+  await deleteById(container, doc.id, [
+    doc?.projectId,
+    doc?.project,
+    doc?.tenant,
+    SYSTEM_PROJECT_ID,
+    cosmosTenant,
+  ]);
 }
 
 function sanitizeStore(value) {
