@@ -29,6 +29,11 @@ param(
   [string]$LoginSecretName = 'entra-login-client-secret',
   [string]$FoundryApiKeySecretName = 'foundry-api-key',
   [string]$OpenAiApiKeySecretName = 'openai-api-key',
+  [string]$FoundryAutoProvision = 'false',
+  [string]$FoundryAccountName = '',
+  [string]$FoundryProjectName = '',
+  [string]$FoundryModelName = 'gpt-4.1-mini',
+  [string]$FoundryModelVersion = '',
   [int]$LoginSecretYears = 1,
   [switch]$CreateResourceGroup
 )
@@ -272,6 +277,7 @@ $providers = @(
   'Microsoft.ContainerRegistry',
   'Microsoft.OperationalInsights',
   'Microsoft.AppConfiguration',
+  'Microsoft.CognitiveServices',
   'Microsoft.ManagedIdentity',
   'Microsoft.Authorization',
   'Microsoft.Sql',
@@ -371,7 +377,7 @@ Ensure-RoleAssignment `
   -Scope $keyVaultId `
   -PrincipalObjectId $deploySp.id `
   -PrincipalType 'ServicePrincipal' `
-  -RoleName 'Key Vault Secrets User'
+  -RoleName 'Key Vault Secrets Officer'
 
 Set-KeyVaultSecretWithRetry `
   -VaultName $resolvedKeyVaultName `
@@ -421,6 +427,11 @@ $summary = [ordered]@{
     ENTRA_LOGIN_CLIENT_SECRET_NAME = $LoginSecretName
     FOUNDRY_API_KEY_SECRET_NAME = $FoundryApiKeySecretName
     OPENAI_API_KEY_SECRET_NAME = $OpenAiApiKeySecretName
+    FOUNDRY_AUTO_PROVISION = $FoundryAutoProvision
+    FOUNDRY_ACCOUNT_NAME = $FoundryAccountName
+    FOUNDRY_PROJECT_NAME = $FoundryProjectName
+    FOUNDRY_MODEL_NAME = $FoundryModelName
+    FOUNDRY_MODEL_VERSION = $FoundryModelVersion
     DEFAULT_GITHUB_ENVIRONMENT = $GitHubEnvironment
   }
   githubEnvironmentSecrets = @(

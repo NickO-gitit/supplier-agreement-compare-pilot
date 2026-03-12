@@ -46,6 +46,11 @@ Required GitHub settings:
   - `ENTRA_LOGIN_CLIENT_SECRET_NAME` (optional; default `entra-login-client-secret`)
   - `FOUNDRY_API_KEY_SECRET_NAME` (optional; default `foundry-api-key`)
   - `OPENAI_API_KEY_SECRET_NAME` (optional; default `openai-api-key`)
+  - `FOUNDRY_AUTO_PROVISION` (optional; `true`/`false`, default `false`)
+  - `FOUNDRY_ACCOUNT_NAME` (optional override for Foundry account)
+  - `FOUNDRY_PROJECT_NAME` (optional; used to build/create Foundry project endpoint)
+  - `FOUNDRY_MODEL_NAME` (optional; default `gpt-4.1-mini`)
+  - `FOUNDRY_MODEL_VERSION` (optional; model version for deployment create)
   - `DEFAULT_GITHUB_ENVIRONMENT` (optional fallback for push-triggered deployments)
 
 ## Important safety rules
@@ -122,6 +127,13 @@ Optional migration-only variables (used to seed App Configuration automatically 
 - `FOUNDRY_API_VERSION`
 - `OPENAI_MODEL`
 
+Optional auto-provisioning variables (used when creating Foundry account/project/model during deploy):
+- `FOUNDRY_AUTO_PROVISION` (`true`/`false`)
+- `FOUNDRY_ACCOUNT_NAME`
+- `FOUNDRY_PROJECT_NAME`
+- `FOUNDRY_MODEL_NAME`
+- `FOUNDRY_MODEL_VERSION`
+
 ### Step 2: Add GitHub Environment Secrets (runtime provider keys only)
 
 In your GitHub repo:
@@ -171,7 +183,7 @@ The script:
 4. Assigns RG roles (`Contributor`, `User Access Administrator`)
 5. Creates/reuses web-login app + client secret
 6. Creates/reuses Key Vault and stores login client secret
-7. Grants deploy identity `Key Vault Secrets User`
+7. Grants deploy identity `Key Vault Secrets Officer`
 8. Outputs all GitHub Environment variables to apply
 
 Important:
@@ -191,6 +203,13 @@ Imagine 4 buttons:
    - GitHub Action starts (push) or you run `workflow_dispatch`.
 
    For multi-tenant deployments, use `workflow_dispatch` and choose `target_environment`.
+   Optional `workflow_dispatch` inputs for Foundry automation:
+   - `provision_foundry=true`
+   - `foundry_model_name` (example: `gpt-4.1-mini`)
+   - `foundry_model_version` (if required by model)
+   - `foundry_deployment_name`
+   - `foundry_project_name`
+   - `foundry_account_name`
 
 3. **Robot checks toys**
    - "Do we have Azure resources already?"
@@ -218,7 +237,7 @@ Prerequisite:
 - Your login app client secret must be stored in Azure Key Vault
   (name defaults to `entra-login-client-secret`).
 - The GitHub OIDC deploy app/service principal must have
-  `Key Vault Secrets User` on that vault.
+  `Key Vault Secrets Officer` on that vault.
 
 ## Local deployment (optional)
 

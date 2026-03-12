@@ -14,6 +14,30 @@ on:
         description: "Deploy a new SQL database (true/false)"
         required: false
         default: "false"
+      provision_foundry:
+        description: "Auto-provision Azure AI Foundry account/project/model deployment (true/false)"
+        required: false
+        default: "false"
+      foundry_account_name:
+        description: "Foundry account name override (optional)"
+        required: false
+        default: ""
+      foundry_project_name:
+        description: "Foundry project name (optional)"
+        required: false
+        default: ""
+      foundry_model_name:
+        description: "Model name to deploy (e.g. gpt-4.1-mini)"
+        required: false
+        default: ""
+      foundry_model_version:
+        description: "Model version (optional, if required by model)"
+        required: false
+        default: ""
+      foundry_deployment_name:
+        description: "Deployment name to create/use (optional)"
+        required: false
+        default: ""
 
 env:
   IMAGE_NAME: ${{ github.event.repository.name }}
@@ -37,6 +61,12 @@ jobs:
       ENTRA_LOGIN_CLIENT_ID: ${{ vars.ENTRA_LOGIN_CLIENT_ID }}
     outputs:
       image_sha: ${{ steps.image.outputs.image_sha }}
+      foundry_endpoint: ${{ steps.ensure_foundry.outputs.foundry_endpoint }}
+      foundry_project_endpoint: ${{ steps.ensure_foundry.outputs.foundry_project_endpoint }}
+      foundry_deployment: ${{ steps.ensure_foundry.outputs.foundry_deployment }}
+      foundry_model_name: ${{ steps.ensure_foundry.outputs.foundry_model_name }}
+      foundry_model_version: ${{ steps.ensure_foundry.outputs.foundry_model_version }}
+      foundry_secret_name: ${{ steps.ensure_foundry.outputs.foundry_secret_name }}
 
     steps:
       - name: Checkout
@@ -63,6 +93,244 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Foundry account/project/deployment (optional)
+        id: ensure_foundry
+        shell: bash
+        env:
+          INPUT_PROVISION_FOUNDRY: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.provision_foundry || '' }}
+          INPUT_FOUNDRY_ACCOUNT_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.foundry_account_name || '' }}
+          INPUT_FOUNDRY_PROJECT_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.foundry_project_name || '' }}
+          INPUT_FOUNDRY_MODEL_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.foundry_model_name || '' }}
+          INPUT_FOUNDRY_MODEL_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.foundry_model_version || '' }}
+          INPUT_FOUNDRY_DEPLOYMENT_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.foundry_deployment_name || '' }}
+          VAR_FOUNDRY_AUTO_PROVISION: ${{ vars.FOUNDRY_AUTO_PROVISION }}
+          VAR_FOUNDRY_ACCOUNT_NAME: ${{ vars.FOUNDRY_ACCOUNT_NAME }}
+          VAR_FOUNDRY_PROJECT_NAME: ${{ vars.FOUNDRY_PROJECT_NAME }}
+          VAR_FOUNDRY_MODEL_NAME: ${{ vars.FOUNDRY_MODEL_NAME }}
+          VAR_FOUNDRY_MODEL_VERSION: ${{ vars.FOUNDRY_MODEL_VERSION }}
+          VAR_FOUNDRY_DEPLOYMENT: ${{ vars.FOUNDRY_DEPLOYMENT }}
+          VAR_FOUNDRY_ENDPOINT: ${{ vars.FOUNDRY_ENDPOINT }}
+          VAR_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.FOUNDRY_PROJECT_ENDPOINT }}
+          VAR_FOUNDRY_SECRET_NAME: ${{ vars.FOUNDRY_API_KEY_SECRET_NAME }}
+        run: |
+          set -euo pipefail
+
+          pick() {
+            local first="$1"
+            local second="$2"
+            if [[ -n "$first" ]]; then
+              echo "$first"
+            else
+              echo "$second"
+            fi
+          }
+
+          normalize_bool() {
+            local raw
+            raw="$(echo "$1" | tr '[:upper:]' '[:lower:]' | xargs)"
+            case "$raw" in
+              1|true|yes|y) echo "true" ;;
+              *) echo "false" ;;
+            esac
+          }
+
+          ensure_provider() {
+            local namespace="$1"
+            local state
+            state=$(az provider show --namespace "$namespace" --query registrationState -o tsv 2>/dev/null || echo "NotRegistered")
+            if [[ "$state" != "Registered" ]]; then
+              az provider register --namespace "$namespace" --wait --output none
+            fi
+            state=$(az provider show --namespace "$namespace" --query registrationState -o tsv)
+            if [[ "$state" != "Registered" ]]; then
+              echo "Provider $namespace is not registered (state: $state)"
+              exit 1
+            fi
+          }
+
+          ensure_foundry_project() {
+            local subscription_id="$1"
+            local resource_group="$2"
+            local account_name="$3"
+            local project_name="$4"
+            local location="$5"
+
+            if [[ -z "$project_name" ]]; then
+              return 0
+            fi
+
+            local versions=(
+              "2025-04-01-preview"
+              "2024-10-01-preview"
+              "2024-10-01"
+            )
+
+            local path
+            local version
+            local created="false"
+            for version in "${versions[@]}"; do
+              path="https://management.azure.com/subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.CognitiveServices/accounts/${account_name}/projects/${project_name}?api-version=${version}"
+              if az rest --method put --url "$path" --body "{\"location\":\"${location}\",\"properties\":{\"displayName\":\"${project_name}\"}}" --output none 2>/dev/null; then
+                created="true"
+                break
+              fi
+            done
+
+            if [[ "$created" != "true" ]]; then
+              echo "Failed to create or update Foundry project '${project_name}'."
+              echo "Set FOUNDRY_PROJECT_ENDPOINT manually if your tenant uses a different project API path."
+              exit 1
+            fi
+          }
+
+          auto_provision="$(normalize_bool "$(pick "$INPUT_PROVISION_FOUNDRY" "$VAR_FOUNDRY_AUTO_PROVISION")")"
+
+          foundry_deployment="$(pick "$INPUT_FOUNDRY_DEPLOYMENT_NAME" "$VAR_FOUNDRY_DEPLOYMENT")"
+          foundry_model_name="$(pick "$INPUT_FOUNDRY_MODEL_NAME" "$VAR_FOUNDRY_MODEL_NAME")"
+          foundry_model_version="$(pick "$INPUT_FOUNDRY_MODEL_VERSION" "$VAR_FOUNDRY_MODEL_VERSION")"
+          foundry_account_name="$(pick "$INPUT_FOUNDRY_ACCOUNT_NAME" "$VAR_FOUNDRY_ACCOUNT_NAME")"
+          foundry_project_name="$(pick "$INPUT_FOUNDRY_PROJECT_NAME" "$VAR_FOUNDRY_PROJECT_NAME")"
+          foundry_endpoint="$VAR_FOUNDRY_ENDPOINT"
+          foundry_project_endpoint="$VAR_FOUNDRY_PROJECT_ENDPOINT"
+          foundry_secret_name="$(pick "$VAR_FOUNDRY_SECRET_NAME" "foundry-api-key")"
+
+          if [[ "$auto_provision" == "true" ]]; then
+            if [[ -z "${KEY_VAULT_NAME:-}" ]]; then
+              echo "KEY_VAULT_NAME is required when Foundry auto-provision is enabled."
+              exit 1
+            fi
+
+            ensure_provider "Microsoft.CognitiveServices"
+
+            if [[ -z "$foundry_deployment" ]]; then
+              foundry_deployment="gpt-4-1-mini"
+            fi
+            if [[ -z "$foundry_model_name" ]]; then
+              foundry_model_name="gpt-4.1-mini"
+            fi
+
+            if [[ -z "$foundry_account_name" ]]; then
+              safe_env="$(echo "$ENVIRONMENT_NAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+              if [[ -z "$safe_env" ]]; then
+                safe_env="suppliercompare"
+              fi
+              foundry_account_name="${safe_env}foundry"
+            fi
+            foundry_account_name="$(echo "$foundry_account_name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | cut -c1-64)"
+            if [[ ${#foundry_account_name} -lt 2 ]]; then
+              echo "Invalid Foundry account name after normalization: '$foundry_account_name'"
+              exit 1
+            fi
+
+            if [[ -z "$foundry_project_name" ]]; then
+              foundry_project_name="${ENVIRONMENT_NAME}-project"
+            fi
+            foundry_project_name="$(echo "$foundry_project_name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-' | cut -c1-64)"
+
+            account_exists="true"
+            az cognitiveservices account show --name "$foundry_account_name" --resource-group "$AZURE_RESOURCE_GROUP" --output none 2>/dev/null || account_exists="false"
+            if [[ "$account_exists" != "true" ]]; then
+              az cognitiveservices account create \
+                --name "$foundry_account_name" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --location "$AZURE_LOCATION" \
+                --kind AIServices \
+                --sku S0 \
+                --yes \
+                --output none
+            fi
+
+            foundry_endpoint="$(az cognitiveservices account show \
+              --name "$foundry_account_name" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query properties.endpoint \
+              -o tsv)"
+            foundry_endpoint="${foundry_endpoint%/}"
+
+            deployment_exists="true"
+            az cognitiveservices account deployment show \
+              --name "$foundry_account_name" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --deployment-name "$foundry_deployment" \
+              --output none 2>/dev/null || deployment_exists="false"
+
+            if [[ "$deployment_exists" != "true" ]]; then
+              set +e
+              if [[ -n "$foundry_model_version" ]]; then
+                az cognitiveservices account deployment create \
+                  --name "$foundry_account_name" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --deployment-name "$foundry_deployment" \
+                  --model-format OpenAI \
+                  --model-name "$foundry_model_name" \
+                  --model-version "$foundry_model_version" \
+                  --sku-name Standard \
+                  --sku-capacity 1 \
+                  --output none
+                deploy_rc=$?
+              else
+                az cognitiveservices account deployment create \
+                  --name "$foundry_account_name" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --deployment-name "$foundry_deployment" \
+                  --model-format OpenAI \
+                  --model-name "$foundry_model_name" \
+                  --sku-name Standard \
+                  --sku-capacity 1 \
+                  --output none
+                deploy_rc=$?
+              fi
+              set -e
+              if [[ $deploy_rc -ne 0 ]]; then
+                echo "Failed to create Foundry model deployment."
+                echo "model=$foundry_model_name version=${foundry_model_version:-<default>} deployment=$foundry_deployment"
+                echo "If model/version is unavailable in region '$AZURE_LOCATION', set valid values and rerun."
+                exit 1
+              fi
+            fi
+
+            ensure_foundry_project \
+              "$AZURE_SUBSCRIPTION_ID" \
+              "$AZURE_RESOURCE_GROUP" \
+              "$foundry_account_name" \
+              "$foundry_project_name" \
+              "$AZURE_LOCATION"
+
+            if [[ -n "$foundry_project_name" ]]; then
+              foundry_project_endpoint="${foundry_endpoint}/api/projects/${foundry_project_name}"
+            fi
+
+            foundry_key="$(az cognitiveservices account keys list \
+              --name "$foundry_account_name" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query key1 -o tsv)"
+            if [[ -z "$foundry_key" ]]; then
+              echo "Unable to resolve Foundry key from account '$foundry_account_name'."
+              exit 1
+            fi
+
+            if ! az keyvault secret set \
+              --vault-name "$KEY_VAULT_NAME" \
+              --name "$foundry_secret_name" \
+              --value "$foundry_key" \
+              --output none; then
+              echo "Failed to write Foundry API key to Key Vault secret '$foundry_secret_name'."
+              echo "Grant the deploy identity 'Key Vault Secrets Officer' (or higher) on vault '$KEY_VAULT_NAME'."
+              exit 1
+            fi
+          fi
+
+          if [[ -z "$foundry_project_endpoint" && -n "$foundry_endpoint" && -n "$foundry_project_name" ]]; then
+            foundry_project_endpoint="${foundry_endpoint}/api/projects/${foundry_project_name}"
+          fi
+
+          echo "foundry_endpoint=${foundry_endpoint}" >> "$GITHUB_OUTPUT"
+          echo "foundry_project_endpoint=${foundry_project_endpoint}" >> "$GITHUB_OUTPUT"
+          echo "foundry_deployment=${foundry_deployment}" >> "$GITHUB_OUTPUT"
+          echo "foundry_model_name=${foundry_model_name}" >> "$GITHUB_OUTPUT"
+          echo "foundry_model_version=${foundry_model_version}" >> "$GITHUB_OUTPUT"
+          echo "foundry_secret_name=${foundry_secret_name}" >> "$GITHUB_OUTPUT"
 
       - name: Ensure Azure providers are registered
         shell: bash
@@ -100,6 +368,7 @@ jobs:
             Microsoft.Sql
             Microsoft.DocumentDB
             Microsoft.AppConfiguration
+            Microsoft.CognitiveServices
           )
 
           for namespace in "${providers[@]}"; do
@@ -201,7 +470,10 @@ jobs:
             exit 1
           fi
 
-          FOUNDRY_SECRET_NAME="${{ vars.FOUNDRY_API_KEY_SECRET_NAME }}"
+          FOUNDRY_SECRET_NAME="${{ needs.build.outputs.foundry_secret_name }}"
+          if [[ -z "$FOUNDRY_SECRET_NAME" ]]; then
+            FOUNDRY_SECRET_NAME="${{ vars.FOUNDRY_API_KEY_SECRET_NAME }}"
+          fi
           if [[ -z "$FOUNDRY_SECRET_NAME" ]]; then
             FOUNDRY_SECRET_NAME="foundry-api-key"
           fi
@@ -249,10 +521,10 @@ jobs:
             containerImage="${{ needs.build.outputs.image_sha }}"
             deploySql=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_sql == 'true' }}
             existingDatabaseConnectionString="${{ vars.DATABASE_CONNECTION_STRING }}"
-            foundryEndpoint="${{ vars.FOUNDRY_ENDPOINT }}"
-            foundryProjectEndpoint="${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
+            foundryEndpoint="${{ needs.build.outputs.foundry_endpoint }}"
+            foundryProjectEndpoint="${{ needs.build.outputs.foundry_project_endpoint }}"
             foundryApiKey="${{ steps.resolve_ai_secrets.outputs.foundry_api_key }}"
-            foundryDeployment="${{ vars.FOUNDRY_DEPLOYMENT }}"
+            foundryDeployment="${{ needs.build.outputs.foundry_deployment }}"
             foundryApiVersion="${{ vars.FOUNDRY_API_VERSION }}"
             openAiApiKey="${{ steps.resolve_ai_secrets.outputs.openai_api_key }}"
             openAiModel="${{ vars.OPENAI_MODEL }}"
@@ -300,9 +572,9 @@ jobs:
             fi
           }
 
-          set_kv "FOUNDRY_PROJECT_ENDPOINT" "${{ vars.FOUNDRY_PROJECT_ENDPOINT }}"
-          set_kv "AZURE_FOUNDRY_ENDPOINT" "${{ vars.FOUNDRY_ENDPOINT }}"
-          set_kv "FOUNDRY_DEPLOYMENT" "${{ vars.FOUNDRY_DEPLOYMENT }}"
+          set_kv "FOUNDRY_PROJECT_ENDPOINT" "${{ needs.build.outputs.foundry_project_endpoint }}"
+          set_kv "AZURE_FOUNDRY_ENDPOINT" "${{ needs.build.outputs.foundry_endpoint }}"
+          set_kv "FOUNDRY_DEPLOYMENT" "${{ needs.build.outputs.foundry_deployment }}"
           set_kv "FOUNDRY_API_VERSION" "${{ vars.FOUNDRY_API_VERSION }}"
           set_kv "OPENAI_MODEL" "${{ vars.OPENAI_MODEL }}"
 
